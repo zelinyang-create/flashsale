@@ -1,0 +1,894 @@
+{
+  "namespaces": [
+    "public"
+  ],
+  "name": "public",
+  "tables": [
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "cart_id": {
+          "name": "cart_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "command_id": {
+          "name": "command_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "request_hash": {
+          "name": "request_hash",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "commerce_transaction_id": {
+          "name": "commerce_transaction_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "commerce_result_hash": {
+          "name": "commerce_result_hash",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "terminal_command_hash": {
+          "name": "terminal_command_hash",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "rules_version": {
+          "name": "rules_version",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'prepared'",
+          "comment": null,
+          "enumItems": [
+            "prepared",
+            "commerce_pending",
+            "commerce_succeeded",
+            "commerce_definitive_failed",
+            "commerce_unknown",
+            "completed",
+            "canceled",
+            "manual_review"
+          ],
+          "mappedType": "enum"
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "1",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "lease_owner": {
+          "name": "lease_owner",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "lease_until": {
+          "name": "lease_until",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "lease_epoch": {
+          "name": "lease_epoch",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "0",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "completion_authorized_epoch": {
+          "name": "completion_authorized_epoch",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "completion_authorized_at": {
+          "name": "completion_authorized_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "next_reconcile_at": {
+          "name": "next_reconcile_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "commerce_started_at": {
+          "name": "commerce_started_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "commerce_resolved_at": {
+          "name": "commerce_resolved_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "terminal_at": {
+          "name": "terminal_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "flash_sale_checkout_execution",
+      "schema": "public",
+      "indexes": [
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_attempt_id_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_attempt_id_unique\" ON \"flash_sale_checkout_execution\" (\"attempt_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_cart_id_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_cart_id_unique\" ON \"flash_sale_checkout_execution\" (\"cart_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_command_id_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_command_id_unique\" ON \"flash_sale_checkout_execution\" (\"command_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_commerce_transaction_id_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_commerce_transaction_id_unique\" ON \"flash_sale_checkout_execution\" (\"commerce_transaction_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_deleted_at",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_deleted_at\" ON \"flash_sale_checkout_execution\" (\"deleted_at\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_live_order_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_live_order_unique\" ON \"flash_sale_checkout_execution\" (\"order_id\") WHERE deleted_at IS NULL AND order_id IS NOT NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_campaign_state",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_campaign_state\" ON \"flash_sale_checkout_execution\" (\"campaign_id\", \"state\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_reconcile_due",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_reconcile_due\" ON \"flash_sale_checkout_execution\" (\"state\", \"next_reconcile_at\") WHERE deleted_at IS NULL AND next_reconcile_at IS NOT NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_active_lease",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_active_lease\" ON \"flash_sale_checkout_execution\" (\"state\", \"lease_until\") WHERE deleted_at IS NULL AND state = 'commerce_pending'"
+        },
+        {
+          "keyName": "flash_sale_checkout_execution_pkey",
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": true,
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "CK_flash_sale_checkout_request_hash",
+          "expression": "request_hash ~ '^[0-9a-f]{64}$'",
+          "definition": "check ((request_hash ~ '^[0-9a-f]{64}$'))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_result_hash",
+          "expression": "commerce_result_hash IS NULL OR commerce_result_hash ~ '^[0-9a-f]{64}$'",
+          "definition": "check ((commerce_result_hash IS NULL OR commerce_result_hash ~ '^[0-9a-f]{64}$'))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_terminal_hash",
+          "expression": "terminal_command_hash IS NULL OR terminal_command_hash ~ '^[0-9a-f]{64}$'",
+          "definition": "check ((terminal_command_hash IS NULL OR terminal_command_hash ~ '^[0-9a-f]{64}$'))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_rules_version",
+          "expression": "rules_version >= 1",
+          "definition": "check ((rules_version >= 1))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_version",
+          "expression": "version >= 1",
+          "definition": "check ((version >= 1))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_attempt_count",
+          "expression": "attempt_count >= 0",
+          "definition": "check ((attempt_count >= 0))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_lease_epoch",
+          "expression": "lease_epoch >= 0",
+          "definition": "check ((lease_epoch >= 0))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_authorized_epoch",
+          "expression": "completion_authorized_epoch IS NULL OR completion_authorized_epoch >= 1",
+          "definition": "check ((completion_authorized_epoch IS NULL OR completion_authorized_epoch >= 1))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_authorized_pair",
+          "expression": "(completion_authorized_epoch IS NULL) = (completion_authorized_at IS NULL)",
+          "definition": "check (((completion_authorized_epoch IS NULL) = (completion_authorized_at IS NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_authorized_fence",
+          "expression": "completion_authorized_epoch IS NULL OR (state = 'commerce_pending' AND completion_authorized_epoch = lease_epoch)",
+          "definition": "check ((completion_authorized_epoch IS NULL OR (state = 'commerce_pending' AND completion_authorized_epoch = lease_epoch)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_lease_pair",
+          "expression": "(lease_owner IS NULL AND lease_until IS NULL) OR (lease_owner IS NOT NULL AND lease_until IS NOT NULL)",
+          "definition": "check (((lease_owner IS NULL AND lease_until IS NULL) OR (lease_owner IS NOT NULL AND lease_until IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_lease_state",
+          "expression": "(state = 'commerce_pending') = (lease_owner IS NOT NULL AND lease_until IS NOT NULL)",
+          "definition": "check (((state = 'commerce_pending') = (lease_owner IS NOT NULL AND lease_until IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_success_result",
+          "expression": "state NOT IN ('commerce_succeeded', 'completed') OR (order_id IS NOT NULL AND last_error_code IS NULL)",
+          "definition": "check ((state NOT IN ('commerce_succeeded', 'completed') OR (order_id IS NOT NULL AND last_error_code IS NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_failed_result",
+          "expression": "state NOT IN ('commerce_definitive_failed', 'canceled') OR (order_id IS NULL AND last_error_code IS NOT NULL)",
+          "definition": "check ((state NOT IN ('commerce_definitive_failed', 'canceled') OR (order_id IS NULL AND last_error_code IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_unknown_result",
+          "expression": "state <> 'commerce_unknown' OR (order_id IS NULL AND last_error_code IS NOT NULL AND next_reconcile_at IS NOT NULL)",
+          "definition": "check ((state <> 'commerce_unknown' OR (order_id IS NULL AND last_error_code IS NOT NULL AND next_reconcile_at IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_order_state",
+          "expression": "order_id IS NULL OR state IN ('commerce_succeeded', 'completed')",
+          "definition": "check ((order_id IS NULL OR state IN ('commerce_succeeded', 'completed')))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_reconcile_state",
+          "expression": "(state = 'commerce_unknown') = (next_reconcile_at IS NOT NULL)",
+          "definition": "check (((state = 'commerce_unknown') = (next_reconcile_at IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_resolved_state",
+          "expression": "(state IN ('commerce_succeeded', 'commerce_definitive_failed', 'completed', 'canceled')) = (commerce_resolved_at IS NOT NULL)",
+          "definition": "check (((state IN ('commerce_succeeded', 'commerce_definitive_failed', 'completed', 'canceled')) = (commerce_resolved_at IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_terminal_state",
+          "expression": "(state IN ('completed', 'canceled', 'manual_review')) = (terminal_at IS NOT NULL)",
+          "definition": "check (((state IN ('completed', 'canceled', 'manual_review')) = (terminal_at IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_result_hash_state",
+          "expression": "(state IN ('commerce_succeeded', 'commerce_definitive_failed', 'commerce_unknown', 'completed', 'canceled')) = (commerce_result_hash IS NOT NULL)",
+          "definition": "check (((state IN ('commerce_succeeded', 'commerce_definitive_failed', 'commerce_unknown', 'completed', 'canceled')) = (commerce_result_hash IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_checkout_terminal_hash_state",
+          "expression": "(state IN ('completed', 'canceled')) = (terminal_command_hash IS NOT NULL)",
+          "definition": "check (((state IN ('completed', 'canceled')) = (terminal_command_hash IS NOT NULL)))"
+        }
+      ],
+      "foreignKeys": {},
+      "nativeEnums": {}
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "campaign_item_id": {
+          "name": "campaign_item_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "variant_id": {
+          "name": "variant_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "raw_quantity": {
+          "name": "raw_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "flash_sale_checkout_execution_item",
+      "schema": "public",
+      "indexes": [
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_item_execution_id",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_item_execution_id\" ON \"flash_sale_checkout_execution_item\" (\"execution_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_execution_item_deleted_at",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_execution_item_deleted_at\" ON \"flash_sale_checkout_execution_item\" (\"deleted_at\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_item_campaign_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_item_campaign_unique\" ON \"flash_sale_checkout_execution_item\" (\"execution_id\", \"campaign_item_id\")"
+        },
+        {
+          "keyName": "IDX_flash_sale_checkout_item_variant_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_checkout_item_variant_unique\" ON \"flash_sale_checkout_execution_item\" (\"execution_id\", \"variant_id\")"
+        },
+        {
+          "keyName": "flash_sale_checkout_execution_item_pkey",
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": true,
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "CK_flash_sale_checkout_item_quantity",
+          "expression": "quantity > 0",
+          "definition": "check ((quantity > 0))"
+        }
+      ],
+      "foreignKeys": {
+        "flash_sale_checkout_execution_item_execution_id_foreign": {
+          "constraintName": "flash_sale_checkout_execution_item_execution_id_foreign",
+          "columnNames": [
+            "execution_id"
+          ],
+          "localTableName": "public.flash_sale_checkout_execution_item",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "referencedTableName": "public.flash_sale_checkout_execution",
+          "updateRule": "cascade"
+        }
+      },
+      "nativeEnums": {}
+    }
+  ],
+  "nativeEnums": {}
+}

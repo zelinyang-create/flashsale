@@ -1,0 +1,76 @@
+{
+  "name": "@medusajs/flash-sale-plugin",
+  "version": "2.21.0",
+  "description": "Medusa plugin for high-concurrency flash-sale campaigns",
+  "author": "Medusa (https://medusajs.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medusajs/medusa.git",
+    "directory": "packages/plugins/flash-sale"
+  },
+  "bugs": {
+    "url": "https://github.com/medusajs/medusa/issues"
+  },
+  "files": [
+    ".medusa/server"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    "./.medusa/server/src/modules/*": "./.medusa/server/src/modules/*/index.js",
+    "./modules/*": "./.medusa/server/src/modules/*/index.js",
+    "./types": {
+      "import": "./.medusa/server/src/types/index.js",
+      "types": "./.medusa/server/src/types/index.d.ts",
+      "require": "./.medusa/server/src/types/index.js"
+    },
+    "./*": "./.medusa/server/src/*.js"
+  },
+  "keywords": [
+    "postgres",
+    "typescript",
+    "ecommerce",
+    "flash-sale",
+    "medusa",
+    "plugin"
+  ],
+  "scripts": {
+    "build:plugin": "medusa plugin:build",
+    "dev": "medusa plugin:develop",
+    "migration:generate": "medusa plugin:db:generate",
+    "migration:prepare-expiry-downgrade": "node -r ts-node/register/transpile-only src/migration-support/prepare-expiry-downgrade.ts",
+    "prepare": "cross-env NODE_ENV=production yarn run build:plugin",
+    "link:watch": "medusa plugin:publish && medusa plugin:develop",
+    "test": "../../../node_modules/.bin/jest --bail --forceExit --testPathPattern=src --testPathIgnorePatterns=integration-tests",
+    "test:integration": "../../../node_modules/.bin/jest --runInBand --forceExit --testPathPattern=integration-tests --modulePathIgnorePatterns=\\.medusa/",
+    "test:multiprocess": "cross-env FLASH_SALE_MULTIPROCESS_FULL=1 ../../../node_modules/.bin/jest --runInBand --forceExit --testPathPattern=multiprocess-allocation.spec.ts --modulePathIgnorePatterns=\\.medusa/",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "watch": "medusa plugin:develop"
+  },
+  "devDependencies": {
+    "@medusajs/cli": "2.21.0",
+    "@medusajs/framework": "2.21.0",
+    "@medusajs/medusa": "2.21.0",
+    "@medusajs/test-utils": "2.21.0",
+    "@swc/core": "1.5.7",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.0.0",
+    "cross-env": "^7.0.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "@medusajs/cli": "2.21.0",
+    "@medusajs/framework": "2.21.0",
+    "@medusajs/medusa": "2.21.0"
+  },
+  "peerDependenciesMeta": {
+    "@medusajs/cli": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "yarn@3.2.1"
+}
