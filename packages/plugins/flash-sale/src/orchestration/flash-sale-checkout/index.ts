@@ -1,4 +1,6 @@
+export * from "./canonical-cart-reader"
 export * from "./contracts"
 export * from "./flash-sale-checkout-orchestrator"
 export * from "./medusa-runtime-adapters"
+export * from "./store-boundary"
 export * from "./validation"

@@ -386,10 +386,11 @@ COMMERCE_UNKNOWN` 的结果命令，以及 `COMPLETED`/`CANCELED` 终态命令�
 - 用完整结果命令和终态命令摘要校验精确重放，旧 Worker、Version、Epoch、Transaction 或
   不同结果不能借用已持久化状态。
 
-Phase 1E-2B 仍负责可信 HTTP 边界和完整外层 Workflow：在持有同一 Cart Lock 后重新授权、
-调用原生 Complete、持久化结果并驱动 Quota Settlement。真实 Full-app Happy Path、同步明确
-失败、结果未知、响应丢失重放和竞态证据也属于 1E-2B；Webhook Inbox 与通用
-Payment UNKNOWN 自动恢复仍不在当前范围。
+Phase 1E-2B1 已实现完整外层 Orchestrator：在持有同一 Cart Lock 后重新授权、调用原生 Complete、
+持久化结果并驱动 Quota Settlement；Phase 1E-2B2 已实现认证 HTTP 边界、Canonical Cart Reader 与
+真实 Full-app Happy Path、库存阶段完整补偿、结果未知、响应丢失/结果落库故障重放和竞态证据。
+同步支付明确拒绝（当前 System Provider 无确定性 Fixture）、Webhook Inbox 与通用 Payment UNKNOWN
+自动恢复仍不在当前范围。
 
 关键约束：
 
@@ -728,6 +729,62 @@ B1 仍不是公开发布门槛。Authenticated Store Route、真实 Cart Canonic
 `medusaIntegrationTestRunner` Cart/Order/Inventory/Payment 证据，以及 Route、Direct Workflow、
 Webhook 的防绕过测试属于 B2。
 
+### 13.5 Phase 1E-2B2：Authenticated Store Boundary 与 Full-app 证据
+
+B2 固定公开入口为 `POST /store/flash-sales/{campaign_id}/checkout`，请求体严格只有
+`{ "cart_id": "..." }`。Middleware 强制 Customer Session/Bearer Authentication，Subject 只取
+`auth_context.actor_id`；客户端不得提交 Subject、Items、Campaign、Rules、Request Hash、Attempt、
+Worker 或 Lease 配置。`Idempotency-Key` 必填，边界在校验后立即使用带 Domain Separator 的
+SHA-256 派生 `command_id`，原值不写库、不写业务日志。`campaign_id` 由独立的有界字符集 Schema
+校验；Store 全局 Publishable Key Middleware 与本路由 Customer Auth、严格 Body 校验都必须实际执行。
+
+Canonical Cart Reader 通过公开 Query/Module API 读取 Cart Ownership、完成状态、Currency、Region、
+Sales Channel 和 Line Items；它还从 `publishable_key_context.sales_channel_ids` 获取服务端 Key Scope，
+该集合缺失、为空或不包含 Cart Sales Channel 时一律 Fail Closed。重复 Variant 数量在服务端聚合并排序。
+Campaign URL 参数只是调用者的
+断言：Reader 与 Guard 共用同一个候选解析函数，先用 `SCHEDULED + ACTIVE` 检测重叠并 Fail Closed，
+再要求唯一候选为 `ACTIVE` 且 ID 与 URL 完全一致，最后从 Campaign Module 派生 Rules Version 和
+Campaign Item Mapping。空 Cart、Custom/无法解析 Item、Owner 不匹配、已修改 Snapshot 和多 Campaign
+均拒绝。Cart 不存在、Owner 不匹配和 Key 无权访问 Sales Channel 对外统一为同一 404/消息，避免所有权
+枚举。
+
+Reader 在任何 Cart Readiness、完成状态、当前 Item/Campaign 检查之前先读取 Existing Execution。只要
+认证 Subject、URL Campaign、Cart、派生 `command_id` 与持久化身份完全一致，`PREPARED`、
+`COMMERCE_PENDING` 及全部后续状态都使用 Execution/ExecutionItem 的不可变 Snapshot 恢复，而不从已完成
+或后来变化的 Cart 重建命令；Ownership 与 Publishable Key Sales-channel Scope 仍重新校验。不同 Key 或
+不同 Campaign 不能借用该恢复路径。这样 Native Complete 已提交、但 Commerce Result 落库失败时，Lease
+过期后的接管者会用同一个持久化 `commerce_transaction_id` 恢复原 Workflow Result，再完成 Quota Consume
+和 Execution Complete，而不会重复 Claim/Hold。
+
+HTTP 结果只暴露四类：`completed` 为 200；仍在处理为 `in_progress`/202；不确定 Commerce 为
+`unknown`/202；确定取消为 `canceled`/409。内部 `MANUAL_REVIEW` 映射为 `unknown`，Quota Reject 映射为
+`canceled`，不向客户端泄露 Worker、Lease、Settlement 或 Provider 内部信息。
+
+真实 `medusaIntegrationTestRunner` 使用 PostgreSQL、System Payment Provider 和 Plugin Build 输出，
+已覆盖 Module/Route/Hook Autoload、普通 Cart 不受影响、普通 `/complete` 与 Direct Workflow 绕过拒绝、
+Happy Path 单 Order/Reservation/Quota Consume、同 Key 响应丢失重放、不同 Key 同 Cart 竞态、活跃 Permit
+借用拒绝、锁等待跨 Lease、过期 Lease 接管与旧 Epoch Fence、Commerce Success 后 Settlement Retry、
+Native Success 到 Result Persistence 之间故障后的同 Transaction 接管恢复、Canonical Read 后 Cart
+Mutation Fail Closed，以及库存阶段完整补偿。负向边界还覆盖缺失/无效 Publishable Key、缺失 Customer
+Auth、额外 Body 字段、缺失/无效 Idempotency Key、无效 Campaign Path、错误 Campaign、跨 Sales Channel
+Key，以及 Owner 不匹配与不存在 Cart 的不可区分响应。
+
+库存阶段的“确定失败”不依赖错误消息，也不伪称具体库存不足。当前 Core 的物理预留失败没有稳定
+`INSUFFICIENT_INVENTORY` Code；只有公开复合证据同时满足单一 Error 的 `action ===
+reserveInventoryStepId`、`handlerType === INVOKE` 且 Transaction 为 `REVERTED` 时，才返回通用
+`INVENTORY_STAGE_REVERTED` 并 Release Quota/Cancel Execution。支付阶段、Generic Throw、补偿未完成或
+Cart Mutation Guard 拒绝都归 `UNKNOWN`，继续保留 `QUOTA_COMMITTING`。
+
+B2 的 Full-app Fixture 使用 System Payment Provider，只证明同步成功和上述库存阶段完整补偿；它不提供
+可确定的同步支付拒绝或 Webhook Fixture。因此本阶段仍明确排除 Guest、Async/Requires-more Payment、
+Provider Webhook Inbox/Dedupe、通用 UNKNOWN Reconciler、Provider 网络 Exactly-once、Admission/JTI、
+Multi-campaign Checkout 和 Cross-region Checkout。Webhook 绕过的独立端到端证据留待具备确定性 Provider
+Fixture 后补充；当前公开 Validate Hook 的 Direct Workflow 绕过证据不等价于已完成 Webhook 证明。
+
+本地 Full-app 门禁先设置 PostgreSQL `DB_HOST`、`DB_USERNAME`、`DB_PASSWORD`，再在
+`packages/plugins/flash-sale` 执行 `yarn test:full-app`；脚本会先运行 `build:plugin`，因为 Medusa Plugin
+Loader 加载 `.medusa/server/src`，不会直接加载源目录。
+
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING
@@ -984,7 +1041,7 @@ Store：
 
 - `POST /store/flash-sales/{id}/admissions`
 - `GET /store/flash-sales/{id}/admissions/{admission_id}`
-- `POST /store/flash-sales/{id}/checkout`
+- `POST /store/flash-sales/{id}/checkout`（URL Campaign 仅作断言，真实 Campaign 与规则由服务端 Cart Snapshot 推导并精确核对）
 - `GET /store/flash-sales/{id}/attempts/{attempt_id}`
 
 Admission Response 包含 `queue_position_estimate`、`poll_after_ms`、`token`、`lease_expires_at` 和 `campaign_epoch`。Queue Position 必须明确为估算值。

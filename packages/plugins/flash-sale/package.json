@@ -43,6 +43,7 @@
     "link:watch": "medusa plugin:publish && medusa plugin:develop",
     "test": "../../../node_modules/.bin/jest --bail --forceExit --testPathPattern=src --testPathIgnorePatterns=integration-tests",
     "test:integration": "../../../node_modules/.bin/jest --runInBand --forceExit --testPathPattern=integration-tests --modulePathIgnorePatterns=\\.medusa/",
+    "test:full-app": "yarn build:plugin && ../../../node_modules/.bin/jest --runInBand --forceExit --runTestsByPath full-app-tests/flash-sale-checkout.full-app.spec.ts --modulePathIgnorePatterns=\\.medusa/",
     "test:multiprocess": "cross-env FLASH_SALE_MULTIPROCESS_FULL=1 ../../../node_modules/.bin/jest --runInBand --forceExit --testPathPattern=multiprocess-allocation.spec.ts --modulePathIgnorePatterns=\\.medusa/",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "watch": "medusa plugin:develop"

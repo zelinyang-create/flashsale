@@ -1,9 +1,15 @@
 jest.mock("@medusajs/medusa/core-flows", () => ({
   completeCartWorkflow: jest.fn(),
+  reserveInventoryStepId: "reserve-inventory-step",
 }))
 
 import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
-import { MedusaError, Modules } from "@medusajs/framework/utils"
+import {
+  MedusaError,
+  Modules,
+  TransactionHandlerType,
+  TransactionState,
+} from "@medusajs/framework/utils"
 import { CampaignState, FlashSalePluginModule } from "../../../types"
 import { createMedusaFlashSaleCheckoutRuntimePorts } from "../medusa-runtime-adapters"
 
@@ -80,6 +86,7 @@ describe("Medusa flash-sale checkout runtime adapters", () => {
         transactionId: "commerce-transaction-1",
         parentStepIdempotencyKey: expect.stringMatching(/^fslockscope_/),
       },
+      throwOnError: false,
     })
 
     // Treat the propagated value as fully known: callback cleanup, rather
@@ -162,15 +169,21 @@ describe("Medusa flash-sale checkout runtime adapters", () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it("classifies only proven insufficient inventory as definitive", async () => {
+  it("classifies only a cleanly reverted public inventory step as definitive", async () => {
     const ports = createMedusaFlashSaleCheckoutRuntimePorts(container as never)
-    run.mockRejectedValueOnce(
-      new MedusaError(
-        MedusaError.Types.NOT_ALLOWED,
-        "insufficient",
-        MedusaError.Codes.INSUFFICIENT_INVENTORY
-      )
-    )
+    run.mockResolvedValueOnce({
+      errors: [
+        {
+          action: "reserve-inventory-step",
+          handlerType: TransactionHandlerType.INVOKE,
+          error: new MedusaError(
+            MedusaError.Types.NOT_ALLOWED,
+            "inventory module rejected the reservation"
+          ),
+        },
+      ],
+      transaction: { getState: () => TransactionState.REVERTED },
+    })
     await expect(
       ports.cartLock.execute(
         "cart-1",
@@ -185,7 +198,37 @@ describe("Medusa flash-sale checkout runtime adapters", () => {
       )
     ).resolves.toEqual({
       kind: "definitive_failure",
-      error_code: "INSUFFICIENT_INVENTORY",
+      error_code: "INVENTORY_STAGE_REVERTED",
+    })
+
+    run.mockResolvedValueOnce({
+      errors: [
+        {
+          action: "authorize-payment-session-step",
+          handlerType: TransactionHandlerType.INVOKE,
+          error: {
+            code: MedusaError.Codes.INSUFFICIENT_INVENTORY,
+            type: MedusaError.Types.NOT_ALLOWED,
+          },
+        },
+      ],
+      transaction: { getState: () => TransactionState.REVERTED },
+    })
+    await expect(
+      ports.cartLock.execute(
+        "cart-1",
+        async (scope) =>
+          await ports.commerce.complete({
+            cart_id: "cart-1",
+            commerce_transaction_id: "commerce-transaction-serialized",
+            parent_step_idempotency_key: scope.parent_step_idempotency_key,
+            signal: scope.signal,
+          }),
+        { timeout: 7, expire: 19 }
+      )
+    ).resolves.toEqual({
+      kind: "unknown",
+      error_code: "NATIVE_COMMERCE_RESULT_UNKNOWN",
     })
 
     run.mockRejectedValueOnce(new Error("provider connection reset"))

@@ -634,8 +634,9 @@ describe("FlashSaleCheckoutOrchestrator", () => {
     )
   })
 
-  it("does not release committing quota when Commerce result persistence fails", async () => {
-    const harness = makeHarness({ resultPersistenceFailure: true })
+  it("recovers the same native transaction after Commerce result persistence fails", async () => {
+    const options = { resultPersistenceFailure: true }
+    const harness = makeHarness(options)
 
     await expect(harness.orchestrator.run(COMMAND)).resolves.toMatchObject({
       status: "in_progress",
@@ -645,6 +646,35 @@ describe("FlashSaleCheckoutOrchestrator", () => {
     expect(
       harness.dependencies.allocation.releaseQuotaSettlement
     ).not.toHaveBeenCalled()
+
+    options.resultPersistenceFailure = false
+    await expect(harness.orchestrator.run(COMMAND)).resolves.toMatchObject({
+      status: "completed",
+      order_id: "order-1",
+      replayed: true,
+    })
+    expect(harness.dependencies.commerce.complete).toHaveBeenCalledTimes(2)
+    expect(harness.dependencies.commerce.complete).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        commerce_transaction_id: "commerce-transaction-1",
+      })
+    )
+    expect(harness.dependencies.commerce.complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        commerce_transaction_id: "commerce-transaction-1",
+      })
+    )
+    expect(
+      harness.dependencies.allocation.claimAndHoldQuota
+    ).toHaveBeenCalledTimes(1)
+    expect(
+      harness.dependencies.allocation.consumeQuotaSettlement
+    ).toHaveBeenCalledTimes(1)
+    expect(harness.dependencies.checkout.completeExecution).toHaveBeenCalledTimes(
+      1
+    )
   })
 
   it.each([

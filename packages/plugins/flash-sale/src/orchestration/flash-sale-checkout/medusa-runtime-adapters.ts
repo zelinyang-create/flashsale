@@ -1,9 +1,14 @@
-import { completeCartWorkflow } from "@medusajs/medusa/core-flows"
+import {
+  completeCartWorkflow,
+  reserveInventoryStepId,
+} from "@medusajs/medusa/core-flows"
 import { ILockingModule, MedusaContainer } from "@medusajs/framework/types"
 import {
   generateEntityId,
   MedusaError,
   Modules,
+  TransactionHandlerType,
+  TransactionState,
 } from "@medusajs/framework/utils"
 import {
   CampaignState,
@@ -23,7 +28,7 @@ import {
 } from "./contracts"
 import { FlashSaleCheckoutOrchestrator } from "./flash-sale-checkout-orchestrator"
 
-const INVENTORY_DEFINITIVE_FAILURE = "INSUFFICIENT_INVENTORY"
+const INVENTORY_DEFINITIVE_FAILURE = "INVENTORY_STAGE_REVERTED"
 const UNKNOWN_NATIVE_RESULT = "NATIVE_COMMERCE_RESULT_UNKNOWN"
 const INVALID_NATIVE_SUCCESS = "NATIVE_COMMERCE_SUCCESS_WITHOUT_ORDER"
 
@@ -163,7 +168,23 @@ class MedusaNativeCommerceAdapter implements NativeCommercePort {
           transactionId: command.commerce_transaction_id,
           parentStepIdempotencyKey: command.parent_step_idempotency_key,
         },
+        throwOnError: false,
       })
+      const workflowErrors = transaction.errors ?? []
+      if (workflowErrors.length) {
+        const onlyError = workflowErrors.length === 1 ? workflowErrors[0] : null
+        const inventoryStageReverted =
+          onlyError?.action === reserveInventoryStepId &&
+          onlyError.handlerType === TransactionHandlerType.INVOKE &&
+          transaction.transaction.getState() === TransactionState.REVERTED
+        if (inventoryStageReverted) {
+          return {
+            kind: "definitive_failure" as const,
+            error_code: INVENTORY_DEFINITIVE_FAILURE,
+          }
+        }
+        return { kind: "unknown" as const, error_code: UNKNOWN_NATIVE_RESULT }
+      }
       const orderId = (transaction.result as { id?: unknown })?.id
       if (typeof orderId !== "string" || !orderId.trim()) {
         return {
@@ -173,15 +194,6 @@ class MedusaNativeCommerceAdapter implements NativeCommercePort {
       }
       return { kind: "succeeded" as const, order_id: orderId }
     } catch (error) {
-      if (
-        MedusaError.isMedusaError(error) &&
-        error.code === MedusaError.Codes.INSUFFICIENT_INVENTORY
-      ) {
-        return {
-          kind: "definitive_failure" as const,
-          error_code: INVENTORY_DEFINITIVE_FAILURE,
-        }
-      }
       return { kind: "unknown" as const, error_code: UNKNOWN_NATIVE_RESULT }
     }
   }

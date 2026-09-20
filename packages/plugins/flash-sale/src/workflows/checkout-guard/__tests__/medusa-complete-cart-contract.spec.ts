@@ -13,6 +13,10 @@ const lockingStepsPath = path.resolve(
   __dirname,
   "../../../../../../core/core-flows/src/locking/steps"
 )
+const transactionOrchestratorPath = path.resolve(
+  __dirname,
+  "../../../../../../core/orchestration/src/transaction/transaction-orchestrator.ts"
+)
 
 describe("Medusa complete-cart source contract", () => {
   it("keeps the public validate hook before Pending Order, reserve, and payment", () => {
@@ -50,6 +54,21 @@ describe("Medusa complete-cart source contract", () => {
     )
     expect(canonicalizeLikeCurrentCore(["inventory-a", "inventory-b"])).toEqual(
       ["inventory-a", "inventory-b"]
+    )
+  })
+
+  it("keeps the public inventory-stage identity and clean REVERTED semantics", () => {
+    const reserve = fs.readFileSync(
+      path.join(corePath, "steps/reserve-inventory.ts"),
+      "utf8"
+    )
+    const orchestrator = fs.readFileSync(transactionOrchestratorPath, "utf8")
+
+    expect(reserve).toContain(
+      'export const reserveInventoryStepId = "reserve-inventory-step"'
+    )
+    expect(orchestrator).toMatch(
+      /if \(result\.hasFailed\) \{\s+flow\.state = TransactionState\.FAILED\s+\} else \{\s+flow\.state = result\.hasReverted\s+\? TransactionState\.REVERTED\s+: TransactionState\.DONE/
     )
   })
 

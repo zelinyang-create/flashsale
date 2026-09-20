@@ -1,6 +1,5 @@
 import { MedusaError } from "@medusajs/framework/utils"
 import {
-  CampaignState,
   FlashSaleCampaignDTO,
   FlashSaleCampaignItemDTO,
   FlashSalePluginModule,
@@ -15,6 +14,7 @@ import {
   CartSnapshotItemInput,
   CheckoutExecutionSnapshot,
 } from "../../modules/flash-sale-checkout"
+import { filterCheckoutBlockingCampaignCandidates } from "../../shared/flash-sale-checkout-candidates"
 
 type Container = {
   resolve<T>(name: string): T
@@ -140,16 +140,10 @@ async function activeCampaignCandidates(
   if (!ids.length) {
     return { campaigns: [], items: [] }
   }
-  const campaigns = (
-    await campaign.listCampaigns({ id: ids }, { order: { id: "ASC" } })
-  ).filter((entry) =>
-    [CampaignState.SCHEDULED, CampaignState.ACTIVE].includes(entry.state)
+  return filterCheckoutBlockingCampaignCandidates(
+    await campaign.listCampaigns({ id: ids }, { order: { id: "ASC" } }),
+    items
   )
-  const activeIds = new Set(campaigns.map((entry) => entry.id))
-  return {
-    campaigns,
-    items: items.filter((item) => activeIds.has(item.campaign_id)),
-  }
 }
 
 export async function validateFlashSaleCartCompletion(
