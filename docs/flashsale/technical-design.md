@@ -677,6 +677,57 @@ Cart Lock，在锁内重新 Authorization，再调用绑定 Transaction 的原�
 Webhook Inbox、Provider 网络 Exactly-once、通用 UNKNOWN 自动恢复、异步支付、Admission/JTI
 和多 Campaign Checkout 仍明确排除。
 
+### 13.4 Phase 1E-2B1：可执行的私有外层编排内核
+
+B1 使用明确命名的 `FlashSaleCheckoutOrchestrator`，不把 Imperative Service 伪装成 Medusa
+Workflow。这里“私有”表示尚无公开 HTTP/不可信输入边界；Package Root 导出的 TypeScript
+Factory 只用于服务器装配，并不是访问控制。原因是 Workflow Constructor 不能安全表达运行时
+`try/catch` 结果分类，而公开
+`ILockingModule.execute` 的自动续租/AbortSignal 只能覆盖一个 Callback；把 Cart Lock 拆到多个
+可独立调度的 Step 会失去可证明的锁生命周期。
+
+Orchestrator 只接受 `ServerCanonicalFlashSaleCheckoutCommand`。该类型表示未来可信边界已经从
+Core Cart、Authenticated Customer 和 Campaign Module 派生出 Cart、Subject、Rules 与精确 Item
+Mapping；未来 HTTP Route 禁止把 Request Body 直接展开到此命令。Request Hash 在内核中重算，
+Attempt ID、Worker ID、Lease/Lock/Reconcile 配置均由服务器产生。
+
+执行顺序和恢复语义固定为：
+
+```text
+Replay First
+-> Claim & Hold（仅当 Execution 不存在）
+-> Prepare Execution
+-> Begin Settlement
+-> Claim Lease
+-> ILockingModule.execute(raw cart_id)
+     -> 锁后 fresh Lease/Epoch Re-authorization
+     -> Native completeCart（持久 commerce_transaction_id）
+     -> 持久化 Success / Definitive Failure / Unknown
+-> Cart Lock 自动释放
+-> Success: Consume + Complete
+   Definite: Release + Cancel
+   Unknown: 保留 QUOTA_COMMITTING，返回独立 status: "unknown"
+```
+
+等待 Cart Lock 导致 Lease 过期时不得调用 Commerce，也不得 Release Quota；下一次 Replay 由新
+Epoch 接管。Commerce Success 后的 Quota Consume 或 Execution Complete 瞬时失败只留下可恢复的
+`COMMERCE_SUCCEEDED`，不会补偿或取消已经成功的 Order。`COMMERCE_UNKNOWN` 不重试 Payment。
+
+Runtime Adapter 在 `ILockingModule.execute` 的实际持锁 Callback 内生成非秘密关联 Key，并在
+当前 Runtime Registry 精确绑定到 `cart_id`。Key 会作为 `parentStepIdempotencyKey` 传播，且可能
+进入 Medusa Workflow Metadata；安全性不依赖 Key 保密，而依赖“当前进程活跃 Registry
+Membership + 精确 Cart 绑定 + 数据库 `commerce_transaction_id` 授权”。Native Complete 必须
+同时满足三者，Callback 成功或抛错都会在 `finally` 删除绑定。
+
+Registry 不跨进程，也不从 Metadata 恢复。已持久化或已知的旧 Key 在 Callback 结束、进程崩溃
+或切换 Runtime 后都不能重新打开 Scope，必须 Fail Closed。Takeover 继续使用持久化 Commerce
+Transaction，但要在新的 Cart Lock Callback 中创建新绑定，并重新完成 Lease/Epoch 和数据库
+Transaction 授权。
+
+B1 仍不是公开发布门槛。Authenticated Store Route、真实 Cart Canonical Read、完整
+`medusaIntegrationTestRunner` Cart/Order/Inventory/Payment 证据，以及 Route、Direct Workflow、
+Webhook 的防绕过测试属于 B2。
+
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING
