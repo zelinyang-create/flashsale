@@ -33,6 +33,10 @@ import {
   SettleQuotaResult,
   TransitionAllocationCommand,
 } from "../application"
+import {
+  appendAllocationOutboxEvent,
+  verifyAllocationOutboxReplay,
+} from "./allocation-outbox-producer"
 
 type PolicyRow = {
   id: string
@@ -1031,7 +1035,12 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   ): Promise<ClaimAttemptResult> {
     const replay = await this.findByIdentity(manager, input)
     if (replay) {
-      return this.resolveClaimReplay(replay, input.request_hash)
+      return await this.resolveClaimReplay(
+        manager,
+        replay,
+        input.request_hash,
+        input.items
+      )
     }
     const policies = (await manager.execute(
       `select id, rules_version, state, per_subject_limit,
@@ -1089,7 +1098,12 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
         "The cart already has a live purchase attempt for this campaign"
       )
     }
-    return this.resolveClaimReplay(existing, input.request_hash)
+    return await this.resolveClaimReplay(
+      manager,
+      existing,
+      input.request_hash,
+      input.items
+    )
   }
 
   private async holdInTransaction(
@@ -1113,14 +1127,22 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     }
     this.assertAttemptIdentity(attempt, input)
     if (attempt.state === PurchaseAttemptState.QUOTA_HELD) {
+      const holds = await this.lockHolds(manager, attempt.id)
+      await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
       return {
         status: "held",
         attempt: mapAttempt(attempt),
-        holds: await this.lockHolds(manager, attempt.id),
+        holds,
         replayed: true,
       }
     }
     if (attempt.state === PurchaseAttemptState.QUOTA_REJECTED) {
+      await verifyAllocationOutboxReplay(
+        manager,
+        mapAttempt(attempt),
+        [],
+        input.items
+      )
       return {
         status: "rejected",
         attempt: mapAttempt(attempt),
@@ -1138,7 +1160,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       return await this.rejectAttempt(
         manager,
         attempt,
-        AllocationCommandErrorCode.HOLD_EXPIRED
+        AllocationCommandErrorCode.HOLD_EXPIRED,
+        input.items
       )
     }
 
@@ -1159,7 +1182,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       return await this.rejectAttempt(
         manager,
         attempt,
-        AllocationCommandErrorCode.FLASH_SALE_NOT_ACTIVE
+        AllocationCommandErrorCode.FLASH_SALE_NOT_ACTIVE,
+        input.items
       )
     }
     if (
@@ -1169,7 +1193,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       return await this.rejectAttempt(
         manager,
         attempt,
-        AllocationCommandErrorCode.STALE_RULES_VERSION
+        AllocationCommandErrorCode.STALE_RULES_VERSION,
+        input.items
       )
     }
 
@@ -1229,7 +1254,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       return await this.rejectAttempt(
         manager,
         attempt,
-        AllocationCommandErrorCode.STALE_RULES_VERSION
+        AllocationCommandErrorCode.STALE_RULES_VERSION,
+        input.items
       )
     }
     const total = input.items.reduce((sum, item) => sum + item.quantity, 0)
@@ -1248,7 +1274,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       return await this.rejectAttempt(
         manager,
         attempt,
-        AllocationCommandErrorCode.PURCHASE_LIMIT_EXCEEDED
+        AllocationCommandErrorCode.PURCHASE_LIMIT_EXCEEDED,
+        input.items
       )
     }
 
@@ -1261,14 +1288,16 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
         return await this.rejectAttempt(
           manager,
           attempt,
-          AllocationCommandErrorCode.CAPACITY_EXHAUSTED
+          AllocationCommandErrorCode.CAPACITY_EXHAUSTED,
+          input.items
         )
       }
       if (Number(capacity.rules_version) !== input.expected_rules_version) {
         return await this.rejectAttempt(
           manager,
           attempt,
-          AllocationCommandErrorCode.STALE_RULES_VERSION
+          AllocationCommandErrorCode.STALE_RULES_VERSION,
+          input.items
         )
       }
       if (
@@ -1281,7 +1310,8 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
         return await this.rejectAttempt(
           manager,
           attempt,
-          AllocationCommandErrorCode.CAPACITY_EXHAUSTED
+          AllocationCommandErrorCode.CAPACITY_EXHAUSTED,
+          input.items
         )
       }
     }
@@ -1360,9 +1390,11 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     if (!attemptUpdates[0]) {
       throw this.invariant("Purchase attempt CAS failed while locked")
     }
+    const updatedAttempt = mapAttempt(attemptUpdates[0])
+    await this.appendTransitionOutbox(manager, updatedAttempt, holds)
     return {
       status: "held",
-      attempt: mapAttempt(attemptUpdates[0]),
+      attempt: updatedAttempt,
       holds,
       replayed: false,
     }
@@ -1402,6 +1434,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     ) {
       throw this.invariant("Committing purchase attempt must have held quota")
     }
+    await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
     return { attempt: mapAttempt(attempt), holds, replayed: true }
   }
 
@@ -1437,6 +1470,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       ) {
         throw this.invariant("Committing purchase attempt must have held quota")
       }
+      await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
       return { attempt: mapAttempt(attempt), holds, replayed: true }
     }
     if (attempt.state !== PurchaseAttemptState.QUOTA_HELD) {
@@ -1478,7 +1512,9 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     if (!updated[0]) {
       throw this.invariant("Purchase attempt begin settlement CAS failed")
     }
-    return { attempt: mapAttempt(updated[0]), holds, replayed: false }
+    const updatedAttempt = mapAttempt(updated[0])
+    await this.appendTransitionOutbox(manager, updatedAttempt, holds)
+    return { attempt: updatedAttempt, holds, replayed: false }
   }
 
   private async settleInTransaction(
@@ -1588,6 +1624,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       if (holds.some((hold) => hold.state !== targetHoldState)) {
         throw this.invariant("Terminal attempt and hold states disagree")
       }
+      await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
       return { attempt: mapAttempt(attempt), holds, replayed: true }
     }
     const settledAt = await this.databaseNow(manager)
@@ -1763,8 +1800,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
         "Purchase attempt settlement CAS failed while locked"
       )
     }
+    const settledAttempt = mapAttempt(settledAttempts[0])
+    await this.appendTransitionOutbox(manager, settledAttempt, resolvedHolds)
     return {
-      attempt: mapAttempt(settledAttempts[0]),
+      attempt: settledAttempt,
       holds: resolvedHolds,
       replayed: false,
     }
@@ -1801,7 +1840,11 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   private async rejectAttempt(
     manager: SqlEntityManager,
     attempt: AttemptRow,
-    errorCode: AllocationCommandErrorCode
+    errorCode: AllocationCommandErrorCode,
+    requestedItems: readonly Readonly<{
+      campaign_item_id: string
+      quantity: number
+    }>[]
   ): Promise<HoldQuotaResult> {
     const rows = (await manager.execute(
       `update flash_sale_purchase_attempt
@@ -1820,9 +1863,16 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     if (!rows[0]) {
       throw this.invariant("Purchase attempt rejection CAS failed while locked")
     }
+    const rejectedAttempt = mapAttempt(rows[0])
+    await this.appendTransitionOutbox(
+      manager,
+      rejectedAttempt,
+      [],
+      requestedItems
+    )
     return {
       status: "rejected",
-      attempt: mapAttempt(rows[0]),
+      attempt: rejectedAttempt,
       error_code: errorCode,
       replayed: false,
     }
@@ -1838,6 +1888,23 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     return rows.map(mapHold)
   }
 
+  private async appendTransitionOutbox(
+    manager: SqlEntityManager,
+    attempt: ClaimedPurchaseAttempt,
+    holds: readonly ClaimedAllocationHold[],
+    requestedItems: readonly Readonly<{
+      campaign_item_id: string
+      quantity: number
+    }>[] = []
+  ): Promise<void> {
+    await this.faultInjector?.hit(
+      "after_domain_transition_before_outbox",
+      attempt.id
+    )
+    await appendAllocationOutboxEvent(manager, attempt, holds, requestedItems)
+    await this.faultInjector?.hit("after_outbox_append_before_commit", attempt.id)
+  }
+
   private async findByIdentity(
     manager: SqlEntityManager,
     input: Pick<
@@ -1847,23 +1914,39 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   ) {
     const rows = (await manager.execute(
       `select ${ATTEMPT_COLUMNS} from flash_sale_purchase_attempt
-        where campaign_id = ? and subject_id = ? and idempotency_key_hash = ? limit 1`,
+        where campaign_id = ? and subject_id = ? and idempotency_key_hash = ?
+        limit 1 for update`,
       [input.campaign_id, input.subject_id, input.idempotency_key_hash]
     )) as AttemptRow[]
     return rows[0]
   }
 
-  private resolveClaimReplay(
+  private async resolveClaimReplay(
+    manager: SqlEntityManager,
     existing: AttemptRow,
-    requestHash: string
-  ): ClaimAttemptResult {
+    requestHash: string,
+    requestedItems: readonly Readonly<{
+      campaign_item_id: string
+      quantity: number
+    }>[]
+  ): Promise<ClaimAttemptResult> {
     if (existing.request_hash !== requestHash) {
       throw new AllocationCommandError(
         AllocationCommandErrorCode.IDEMPOTENCY_CONFLICT,
         "The idempotency identity was already used for another request"
       )
     }
-    return { attempt: mapAttempt(existing), replayed: true }
+    const attempt = mapAttempt(existing)
+    if (attempt.state !== PurchaseAttemptState.PENDING) {
+      const holds = await this.lockHolds(manager, attempt.id)
+      await verifyAllocationOutboxReplay(
+        manager,
+        attempt,
+        holds,
+        requestedItems
+      )
+    }
+    return { attempt, replayed: true }
   }
 
   private invariant(message: string) {
@@ -1875,5 +1958,11 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
 }
 
 export interface AllocationFaultInjector {
-  hit(name: "during_expiry_release", attemptId: string): void | Promise<void>
+  hit(
+    name:
+      | "during_expiry_release"
+      | "after_domain_transition_before_outbox"
+      | "after_outbox_append_before_commit",
+    attemptId: string
+  ): void | Promise<void>
 }

@@ -14,6 +14,8 @@ import {
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -35,6 +37,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   dbName: "medusa-flash-sale-allocation",
   moduleModels: [
     AllocationCampaignFence,
+    AllocationOutboxControl,
+    AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
     PurchaseAttempt,
@@ -731,6 +735,45 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           {
             code: AllocationInvariantIssueCode.FENCED_CAPACITY_ACTIVE,
             entity_id: fenced.capacities[0].id,
+          },
+        ])
+
+        await service.activateAllocationOutbox({})
+        const missingOutboxCampaign = nextId("coverage-outbox-missing")
+        await open(missingOutboxCampaign, 1)
+        const missingOutboxHeld = await hold(
+          missingOutboxCampaign,
+          nextId("outbox-missing")
+        )
+        await execute(
+          `delete from flash_sale_allocation_outbox_event
+            where aggregate_id = ? and aggregate_version = ?`,
+          [missingOutboxHeld.attempt.id, missingOutboxHeld.attempt.version]
+        )
+        await auditAndCover(missingOutboxCampaign, [
+          {
+            code: AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_MISSING,
+            entity_id: missingOutboxHeld.attempt.id,
+          },
+        ])
+
+        const mismatchedOutboxCampaign = nextId("coverage-outbox-name")
+        await open(mismatchedOutboxCampaign, 1)
+        const mismatchedOutboxHeld = await hold(
+          mismatchedOutboxCampaign,
+          nextId("outbox-name")
+        )
+        await execute(
+          `update flash_sale_allocation_outbox_event
+              set event_name = 'flash_sale.quota.wrong.v1'
+            where aggregate_id = ? and aggregate_version = ?`,
+          [mismatchedOutboxHeld.attempt.id, mismatchedOutboxHeld.attempt.version]
+        )
+        await auditAndCover(mismatchedOutboxCampaign, [
+          {
+            code:
+              AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_NAME_MISMATCH,
+            entity_id: mismatchedOutboxHeld.attempt.id,
           },
         ])
 

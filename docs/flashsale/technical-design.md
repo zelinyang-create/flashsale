@@ -853,9 +853,31 @@ Fencing 用于 Expiry、Reconciliation、Outbox Claim/Mark 和长时间 Shard Ow
 
 ## 16. Outbox、Inbox 与补偿
 
-业务状态与 Outbox Row 在同一 PostgreSQL Transaction 提交。Publisher 采用 `FOR UPDATE SKIP LOCKED`、有界 Batch、Lock/Fence、Broker Ack 后标记 Published。Ack 后崩溃会导致重复发送，这是预期行为。
+### 16.1 Phase 1F-A 已实现：Allocation 原子 Producer 与数据库状态机
 
-准确承诺：事件可以重复投递，但同一 Consumer 对同一 Event 的数据库业务效果最多提交一次。
+Allocation 现在把 `QUOTA_HELD`、`QUOTA_REJECTED`、`QUOTA_COMMITTING`、
+`QUOTA_CONSUMED`、`QUOTA_RELEASED` 和 `QUOTA_EXPIRED` 的版本化事件，与对应
+Attempt/Hold/Counter 状态在同一 PostgreSQL Transaction 提交。唯一键为
+`(purchase_attempt, attempt_id, aggregate_version)`；Event Hash 覆盖完整 immutable canonical envelope；其中
+Item ID 使用 UTF-16 code-unit 字典序（显式 `<`/`>`，不使用 locale-sensitive comparator），
+但不覆盖随机 Event ID 和数据库时间。重放只验证并返回已有事件，不重复追加；同版本内容漂移会让事务失败。
+
+数据库投递状态机已经提供 `PENDING -> PUBLISHING -> PUBLISHED`、Retry、Dead Letter、受控 Redrive、
+`FOR UPDATE SKIP LOCKED`、Lease Epoch Fencing 和按 Aggregate Head-of-line。`OUTBOX_REQUIRED` 激活水位之后，
+业务重放缺少当前 Version 事件时 Fail Closed；水位前 Legacy Row 是明确豁免，不能据此宣称历史完整。
+
+`QUOTA_RELEASED` Payload 区分 `held_cancel` 与 `settlement_release`。Payload 不保存 Subject、Idempotency/
+Request/Command 值或摘要、Token、Worker/Lease、Payment 或原始异常。
+
+### 16.2 Phase 1F-A 尚未实现
+
+当前没有 EventBus/Broker Dispatcher、调度 Job、Broker Ack 集成、Consumer Inbox、Webhook Inbox 或消费者
+幂等。因此 Phase 1F-A 只保证“业务事实与待发布行原子持久化”和数据库内安全认领，**不保证事件已经离开数据库，
+也不宣称端到端 At-least-once Delivery**。未来 Publisher 必须在真实 Broker Ack 后才调用 fenced Published 命令；
+Ack 后崩溃造成的重复发送，再由未来 Consumer Inbox 处理。
+
+目标态的准确承诺是：事件允许重复投递，同一 Consumer 对同一 Event 的数据库业务效果最多提交一次。此承诺要等
+Dispatcher 与 Consumer Inbox 完成后才成立。
 
 补偿必须按当前事实决定：
 
@@ -1254,13 +1276,16 @@ Nightly/Release Candidate：多实例并发、Failpoint、Toxiproxy、No/Fixed/A
 
 ### Phase 1：MVP 正确性内核，约两周
 
-Plugin、Campaign、Attempt、Hold、条件 Quota Claim、Idempotency、Checkout Composition、Expiry、Reconciliation、Outbox 和两实例并发测试。
+Plugin、Campaign、Attempt、Hold、条件 Quota Claim、Idempotency、Checkout Composition、Expiry、Reconciliation、
+Allocation Outbox 原子 Producer/数据库投递状态机和两实例并发测试。Broker Dispatcher 与 Consumer Inbox 不属于
+当前 Phase 1F-A 交付。
 
 退出条件：Quota 50、500 并发、10 轮零超发、零重复、零对账差异。
 
 ### Phase 2：高级可靠性，约两周
 
-Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Webhook Inbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
+Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Outbox Broker Dispatcher、
+Consumer/Webhook Inbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

@@ -30,6 +30,7 @@ class AllocationWorker {
   private sequence = 0
   private stderr = ""
   private failed = false
+  private intentionalExit = false
 
   constructor(databaseUrl: string, schema: string) {
     this.readyPromise = new Promise<void>((resolve, reject) => {
@@ -72,7 +73,7 @@ class AllocationWorker {
     this.child.once("error", (error) => this.fail(error))
     this.child.once("exit", (code) => {
       this.exitResolve()
-      if (code !== 0 || this.pending.size > 0) {
+      if ((!this.intentionalExit && code !== 0) || this.pending.size > 0) {
         this.fail(
           new Error(
             `Allocation worker exited with code ${code}. ${this.stderr}`.trim()
@@ -95,7 +96,11 @@ class AllocationWorker {
   }
 
   async close() {
-    if (this.child.exitCode !== null || this.failed) {
+    if (
+      this.child.exitCode !== null ||
+      this.child.signalCode !== null ||
+      this.failed
+    ) {
       return
     }
     await this.request({ id: ++this.sequence, kind: "shutdown" })
@@ -113,6 +118,16 @@ class AllocationWorker {
         resolve()
       })
     })
+  }
+
+  async crash() {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return
+    if (this.pending.size > 0) {
+      throw new Error("Cannot crash an allocation worker with pending requests")
+    }
+    this.intentionalExit = true
+    this.child.kill()
+    await this.exitPromise
   }
 
   private request(request: WorkerRequest) {
@@ -221,6 +236,21 @@ export class AllocationWorkerFleet {
       const workerIndex = index % this.workers.length
       return grouped[workerIndex][positions[workerIndex]++]
     })
+  }
+
+  async executeOn(
+    workerIndex: number,
+    operations: readonly MultiprocessOperation[]
+  ) {
+    const worker = this.workers[workerIndex]
+    if (!worker) throw new Error(`Allocation worker ${workerIndex} does not exist`)
+    return await worker.execute(operations)
+  }
+
+  async crash(workerIndex: number) {
+    const worker = this.workers[workerIndex]
+    if (!worker) throw new Error(`Allocation worker ${workerIndex} does not exist`)
+    await worker.crash()
   }
 
   async close() {

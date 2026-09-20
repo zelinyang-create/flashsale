@@ -1,10 +1,72 @@
 import { AllocationItemInput, NormalizedAllocationItem } from "../domain"
 import {
   AllocationFenceDisposition,
+  AllocationOutboxStatus,
   AllocationPolicyState,
   CapacityState,
   PurchaseAttemptState,
 } from "../../../types"
+
+export type ClaimedAllocationOutboxEvent = Readonly<{
+  id: string
+  event_name: string
+  schema_version: number
+  aggregate_type: string
+  aggregate_id: string
+  aggregate_version: number
+  event_hash: string
+  payload: Record<string, unknown>
+  status: AllocationOutboxStatus
+  available_at: Date
+  occurred_at: Date
+  published_at: Date | null
+  attempt_count: number
+  max_attempts: number | null
+  lease_owner: string | null
+  lease_until: Date | null
+  lease_epoch: number
+  published_by: string | null
+  published_lease_epoch: number | null
+  last_error_code: string | null
+  dead_lettered_at: Date | null
+  redrive_count: number
+}>
+
+export type ActivateAllocationOutboxCommand = Readonly<Record<string, never>>
+export type ActivateAllocationOutboxResult = Readonly<{
+  required_after: Date
+  replayed: boolean
+}>
+export type ClaimAllocationOutboxEventsCommand = Readonly<{
+  worker_id: string
+  limit: number
+  lease_seconds: number
+  max_attempts: number
+}>
+export type ClaimAllocationOutboxEventsResult = Readonly<{
+  events: readonly ClaimedAllocationOutboxEvent[]
+}>
+export type MarkAllocationOutboxPublishedCommand = Readonly<{
+  event_id: string
+  worker_id: string
+  lease_epoch: number
+}>
+export type FailAllocationOutboxEventCommand = Readonly<{
+  event_id: string
+  worker_id: string
+  lease_epoch: number
+  retry_after_seconds: number
+  error_code: string
+  permanent: boolean
+}>
+export type RedriveAllocationOutboxEventCommand = Readonly<{
+  event_id: string
+  event_hash: string
+}>
+export type AllocationOutboxMutationResult = Readonly<{
+  disposition: "published" | "retried" | "dead_lettered" | "redriven" | "fenced"
+  event: ClaimedAllocationOutboxEvent | null
+}>
 
 export const ALLOCATION_REQUEST_SCHEMA_VERSION = 1 as const
 
@@ -167,6 +229,8 @@ export enum AllocationInvariantIssueCode {
   POLICY_CAPACITY_RULES_VERSION_MISMATCH = "POLICY_CAPACITY_RULES_VERSION_MISMATCH",
   FENCED_POLICY_ACTIVE = "FENCED_POLICY_ACTIVE",
   FENCED_CAPACITY_ACTIVE = "FENCED_CAPACITY_ACTIVE",
+  OUTBOX_CURRENT_EVENT_MISSING = "OUTBOX_CURRENT_EVENT_MISSING",
+  OUTBOX_CURRENT_EVENT_NAME_MISMATCH = "OUTBOX_CURRENT_EVENT_NAME_MISMATCH",
 }
 
 export type AllocationInvariantSample = Readonly<{
@@ -339,6 +403,24 @@ export interface AllocationStore
   extends AllocationQuotaStore,
     AllocationControlStore {}
 
+export interface AllocationOutboxStore {
+  activateOutboxRequired(
+    input: ActivateAllocationOutboxCommand
+  ): Promise<ActivateAllocationOutboxResult>
+  claimOutboxEvents(
+    input: ClaimAllocationOutboxEventsCommand
+  ): Promise<ClaimAllocationOutboxEventsResult>
+  markOutboxPublished(
+    input: MarkAllocationOutboxPublishedCommand
+  ): Promise<AllocationOutboxMutationResult>
+  failOutboxEvent(
+    input: FailAllocationOutboxEventCommand
+  ): Promise<AllocationOutboxMutationResult>
+  redriveOutboxEvent(
+    input: RedriveAllocationOutboxEventCommand
+  ): Promise<AllocationOutboxMutationResult>
+}
+
 export enum AllocationCommandErrorCode {
   INVALID_COMMAND = "INVALID_COMMAND",
   INVALID_IDEMPOTENCY_KEY_HASH = "INVALID_IDEMPOTENCY_KEY_HASH",
@@ -359,6 +441,9 @@ export enum AllocationCommandErrorCode {
   ALLOCATION_CAMPAIGN_FENCE_CONFLICT = "ALLOCATION_CAMPAIGN_FENCE_CONFLICT",
   LOCK_TIMEOUT_RETRYABLE = "LOCK_TIMEOUT_RETRYABLE",
   ALLOCATION_INVARIANT_VIOLATION = "ALLOCATION_INVARIANT_VIOLATION",
+  OUTBOX_EVENT_NOT_FOUND = "OUTBOX_EVENT_NOT_FOUND",
+  OUTBOX_STATE_CONFLICT = "OUTBOX_STATE_CONFLICT",
+  OUTBOX_INVARIANT_VIOLATION = "OUTBOX_INVARIANT_VIOLATION",
 }
 
 export class AllocationCommandError extends Error {

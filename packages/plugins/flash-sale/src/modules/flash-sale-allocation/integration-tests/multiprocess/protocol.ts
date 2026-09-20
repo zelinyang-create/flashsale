@@ -1,7 +1,10 @@
 import {
   ClaimAndHoldQuotaCommand,
+  ClaimAllocationOutboxEventsCommand,
   ExpireDueQuotaCommand,
   ExpireQuotaCommand,
+  FailAllocationOutboxEventCommand,
+  MarkAllocationOutboxPublishedCommand,
   SettlementQuotaCommand,
 } from "../../application"
 
@@ -26,6 +29,18 @@ export type MultiprocessOperation =
       kind: "expire_due"
       command: ExpireDueQuotaCommand
     }>
+  | Readonly<{
+      kind: "claim_outbox"
+      command: ClaimAllocationOutboxEventsCommand
+    }>
+  | Readonly<{
+      kind: "mark_outbox_published"
+      command: MarkAllocationOutboxPublishedCommand
+    }>
+  | Readonly<{
+      kind: "fail_outbox"
+      command: FailAllocationOutboxEventCommand
+    }>
 
 export type MultiprocessSuccess = Readonly<{
   outcome: "fulfilled"
@@ -44,6 +59,18 @@ export type MultiprocessSuccess = Readonly<{
     error_code: string
   }>[]
   attempt_ids?: readonly string[]
+  event_ids?: readonly string[]
+  outbox_events?: readonly Readonly<{
+    id: string
+    lease_epoch: number
+    lease_owner: string | null
+  }>[]
+  disposition?:
+    | "published"
+    | "retried"
+    | "dead_lettered"
+    | "redriven"
+    | "fenced"
 }>
 
 export type MultiprocessFailure = Readonly<{

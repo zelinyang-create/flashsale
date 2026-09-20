@@ -14,6 +14,8 @@ import {
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -54,6 +56,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   dbName: "medusa-flash-sale-allocation-multiprocess",
   moduleModels: [
     AllocationCampaignFence,
+    AllocationOutboxControl,
+    AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
     PurchaseAttempt,
@@ -714,6 +718,213 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         }
       } finally {
         await fleet.close()
+      }
+    })
+
+    it(`claims one disjoint outbox batch across ${workerCount} Node processes`, async () => {
+      const total = workerCount * 20
+      for (let index = 0; index < total; index++) {
+        await execute(
+          `insert into flash_sale_allocation_outbox_event
+            (id, event_name, schema_version, aggregate_type, aggregate_id,
+             aggregate_version, event_hash, payload, status, available_at,
+             occurred_at, attempt_count, lease_epoch, redrive_count)
+           values (?, 'test.multiprocess.v1', 1, 'purchase_attempt', ?, 1, ?,
+                   ?::jsonb, 'pending', now(), now(), 0, 0, 0)`,
+          [
+            `mp-outbox-${process.pid}-${index}`,
+            `mp-aggregate-${process.pid}-${index}`,
+            digest(`mp-outbox-${process.pid}-${index}`),
+            JSON.stringify({ index }),
+          ]
+        )
+      }
+      const fleet = await AllocationWorkerFleet.create(
+        dbConfig.clientUrl,
+        dbConfig.schema ?? "public",
+        workerCount
+      )
+      try {
+        const results = await fleet.execute(
+          Array.from(
+            { length: workerCount },
+            (_, index): MultiprocessOperation => ({
+              kind: "claim_outbox",
+              command: {
+                worker_id: `mp-outbox-worker-${index}`,
+                limit: 20,
+                lease_seconds: 30,
+                max_attempts: 3,
+              },
+            })
+          )
+        )
+        expectAllFulfilled(results, "multiprocess outbox claim")
+        const eventIds = results.flatMap((result) =>
+          result.outcome === "fulfilled" ? result.event_ids ?? [] : []
+        )
+        expect(eventIds).toHaveLength(total)
+        expect(new Set(eventIds).size).toBe(total)
+        expect(
+          await execute(
+            `select count(*)::int as publishing,
+                    count(distinct lease_owner)::int as owners,
+                    min(attempt_count)::int as min_attempt,
+                    max(attempt_count)::int as max_attempt
+               from flash_sale_allocation_outbox_event
+              where id like 'mp-outbox-%' and status = 'publishing'`
+          )
+        ).toEqual([
+          {
+            publishing: total,
+            owners: workerCount,
+            min_attempt: 1,
+            max_attempt: 1,
+          },
+        ])
+      } finally {
+        await fleet.close()
+      }
+    })
+
+    it("takes over an expired lease after a worker crash and fences both stale mutations", async () => {
+      const eventId = `mp-takeover-${process.pid}`
+      const aggregateId = `mp-takeover-aggregate-${process.pid}`
+      await execute(
+        `insert into flash_sale_allocation_outbox_event
+          (id, event_name, schema_version, aggregate_type, aggregate_id,
+           aggregate_version, event_hash, payload, status, available_at,
+           occurred_at, attempt_count, lease_epoch, redrive_count)
+         values (?, 'test.multiprocess.takeover.v1', 1, 'purchase_attempt', ?, 1,
+                 ?, ?::jsonb, 'pending', clock_timestamp(), clock_timestamp(),
+                 0, 0, 0)`,
+        [eventId, aggregateId, digest(eventId), JSON.stringify({ eventId })]
+      )
+
+      const originalFleet = await AllocationWorkerFleet.create(
+        dbConfig.clientUrl,
+        dbConfig.schema ?? "public",
+        2
+      )
+      let takeoverFleet: AllocationWorkerFleet | undefined
+      try {
+        const original = await originalFleet.executeOn(0, [
+          {
+            kind: "claim_outbox",
+            command: {
+              worker_id: "mp-crashed-owner",
+              limit: 1,
+              lease_seconds: 1,
+              max_attempts: 3,
+            },
+          },
+        ])
+        expect(original).toHaveLength(1)
+        expect(original[0]).toMatchObject({
+          outcome: "fulfilled",
+          event_ids: [eventId],
+          outbox_events: [
+            {
+              id: eventId,
+              lease_epoch: 1,
+              lease_owner: "mp-crashed-owner",
+            },
+          ],
+        })
+
+        // The process that owns epoch 1 exits without mark/retry. PostgreSQL's
+        // own clock advances past the lease before a different process claims.
+        await originalFleet.crash(0)
+        await execute("select pg_sleep(1.1)")
+
+        takeoverFleet = await AllocationWorkerFleet.create(
+          dbConfig.clientUrl,
+          dbConfig.schema ?? "public",
+          2
+        )
+        const takeover = await takeoverFleet.executeOn(0, [
+          {
+            kind: "claim_outbox",
+            command: {
+              worker_id: "mp-takeover-owner",
+              limit: 1,
+              lease_seconds: 30,
+              max_attempts: 3,
+            },
+          },
+        ])
+        expect(takeover[0]).toMatchObject({
+          outcome: "fulfilled",
+          event_ids: [eventId],
+          outbox_events: [
+            {
+              id: eventId,
+              lease_epoch: 2,
+              lease_owner: "mp-takeover-owner",
+            },
+          ],
+        })
+
+        const stale = await originalFleet.executeOn(1, [
+          {
+            kind: "mark_outbox_published",
+            command: {
+              event_id: eventId,
+              worker_id: "mp-crashed-owner",
+              lease_epoch: 1,
+            },
+          },
+          {
+            kind: "fail_outbox",
+            command: {
+              event_id: eventId,
+              worker_id: "mp-crashed-owner",
+              lease_epoch: 1,
+              retry_after_seconds: 1,
+              error_code: "STALE_WORKER",
+              permanent: false,
+            },
+          },
+        ])
+        expect(stale.map((result) =>
+          result.outcome === "fulfilled" ? result.disposition : result.outcome
+        )).toEqual(["fenced", "fenced"])
+
+        const finalized = await takeoverFleet.executeOn(1, [
+          {
+            kind: "mark_outbox_published",
+            command: {
+              event_id: eventId,
+              worker_id: "mp-takeover-owner",
+              lease_epoch: 2,
+            },
+          },
+        ])
+        expect(finalized[0]).toMatchObject({
+          outcome: "fulfilled",
+          disposition: "published",
+          event_ids: [eventId],
+        })
+        expect(
+          await execute(
+            `select id, status, attempt_count, lease_epoch, published_by,
+                    published_lease_epoch
+               from flash_sale_allocation_outbox_event where id = ?`,
+            [eventId]
+          )
+        ).toEqual([
+          {
+            id: eventId,
+            status: "published",
+            attempt_count: 2,
+            lease_epoch: 2,
+            published_by: "mp-takeover-owner",
+            published_lease_epoch: 2,
+          },
+        ])
+      } finally {
+        if (takeoverFleet) await takeoverFleet.close()
+        await originalFleet.close()
       }
     })
   },

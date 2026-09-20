@@ -10,6 +10,8 @@ import { FlashSalePluginModule } from "../../../types"
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -35,6 +37,8 @@ const checkoutMigrations = path.resolve(
 )
 const models = [
   AllocationCampaignFence,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -53,6 +57,30 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     it("reverts and reapplies the Allocation migration without schema loss", async () => {
       const orm = MikroOrmWrapper.getOrm()
       const migrator = orm.getMigrator()
+      await migrator.down()
+      const afterOutboxConstraintDown = (await MikroOrmWrapper.forkManager().execute(
+        `select
+          to_regclass('public.flash_sale_allocation_outbox_event') as outbox_table,
+          exists(select 1 from pg_constraint
+                  where conname = 'ck_flash_sale_allocation_outbox_bounded_identifiers') as bounded_constraint`
+      )) as Array<{ outbox_table: string | null; bounded_constraint: boolean }>
+      expect(afterOutboxConstraintDown).toEqual([
+        {
+          outbox_table: "flash_sale_allocation_outbox_event",
+          bounded_constraint: false,
+        },
+      ])
+
+      await migrator.down()
+      const afterOutboxDown = (await MikroOrmWrapper.forkManager().execute(
+        `select
+          to_regclass('public.flash_sale_allocation_outbox_event') as event_table,
+          to_regclass('public.flash_sale_allocation_outbox_control') as control_table`
+      )) as Array<{ event_table: string | null; control_table: string | null }>
+      expect(afterOutboxDown).toEqual([
+        { event_table: null, control_table: null },
+      ])
+
       await migrator.down()
       const afterSettlementDown = (await MikroOrmWrapper.forkManager().execute(
         `select
@@ -108,6 +136,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         `select
           to_regclass('public.flash_sale_allocation_policy') is not null as policy_table,
           to_regclass('public.flash_sale_allocation_campaign_fence') is not null as fence_table,
+          to_regclass('public.flash_sale_allocation_outbox_event') is not null as outbox_table,
+          to_regclass('public.flash_sale_allocation_outbox_control') is not null as outbox_control_table,
           to_regclass('public.flash_sale_capacity') is not null as capacity_table,
           exists(select 1 from pg_indexes
                   where indexname = 'IDX_flash_sale_attempt_idempotency_unique') as identity_index,
@@ -118,17 +148,22 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
                   where table_name = 'flash_sale_purchase_attempt'
                     and column_name = 'settlement_id') as settlement_column,
           exists(select 1 from pg_constraint
-                  where conname = 'ck_flash_sale_capacity_balance') as capacity_check`
+                  where conname = 'ck_flash_sale_capacity_balance') as capacity_check,
+          exists(select 1 from pg_constraint
+                  where conname = 'ck_flash_sale_allocation_outbox_bounded_identifiers') as outbox_bounded_check`
       )) as Array<Record<string, boolean>>
       expect(evidence).toEqual([
         {
           policy_table: true,
           fence_table: true,
+          outbox_table: true,
+          outbox_control_table: true,
           capacity_table: true,
           identity_index: true,
           settlement_cart_index: true,
           settlement_column: true,
           capacity_check: true,
+          outbox_bounded_check: true,
         },
       ])
     })
@@ -137,6 +172,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       const orm = MikroOrmWrapper.getOrm()
       const migrator = orm.getMigrator()
       const manager = MikroOrmWrapper.forkManager()
+      await migrator.down()
+      await migrator.down()
       await migrator.down()
       await migrator.down()
       await manager.execute(
@@ -297,6 +334,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         held.attempt.id,
       ])
 
+      await migrator.down()
+      await migrator.down()
       await migrator.down()
       await expect(migrator.down()).rejects.toThrow()
       await expect(
@@ -475,6 +514,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       }
       await service.beginQuotaSettlement(command)
 
+      await migrator.down()
+      await migrator.down()
       await expect(migrator.down()).rejects.toThrow()
       await expect(
         prepareExpirySchemaDowngrade(manager as SqlEntityManager, "dry-run")
@@ -492,6 +533,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
+      await migrator.up()
       await service.releaseQuotaSettlement(command)
       await expect(
         prepareExpirySchemaDowngrade(manager as SqlEntityManager, "dry-run")

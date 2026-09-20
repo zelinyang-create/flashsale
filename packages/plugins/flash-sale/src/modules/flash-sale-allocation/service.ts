@@ -34,10 +34,25 @@ import {
   ReconcileAllocationCommand,
   ReconcileAllocationHandler,
   ReconcileAllocationResult,
+  ActivateAllocationOutboxCommand,
+  ActivateAllocationOutboxHandler,
+  ActivateAllocationOutboxResult,
+  ClaimAllocationOutboxEventsCommand,
+  ClaimAllocationOutboxEventsHandler,
+  ClaimAllocationOutboxEventsResult,
+  MarkAllocationOutboxPublishedCommand,
+  MarkAllocationOutboxPublishedHandler,
+  FailAllocationOutboxEventCommand,
+  FailAllocationOutboxEventHandler,
+  RedriveAllocationOutboxEventCommand,
+  RedriveAllocationOutboxEventHandler,
+  AllocationOutboxMutationResult,
 } from "./application"
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -45,6 +60,7 @@ import {
 } from "./models"
 import {
   PostgresAllocationAttemptStore,
+  PostgresAllocationOutboxStore,
   PostgresAllocationReconciliationStore,
 } from "./persistence"
 
@@ -57,6 +73,8 @@ const WRITE_COMMAND_REQUIRED =
 
 class FlashSaleAllocationModuleService extends MedusaService({
   AllocationCampaignFence,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -78,6 +96,11 @@ class FlashSaleAllocationModuleService extends MedusaService({
   private readonly closeAllocationHandler_: CloseAllocationHandler
   private readonly fenceAndCloseCampaignAllocationHandler_: FenceAndCloseCampaignAllocationHandler
   private readonly reconcileAllocationHandler_: ReconcileAllocationHandler
+  private readonly activateAllocationOutboxHandler_: ActivateAllocationOutboxHandler
+  private readonly claimAllocationOutboxEventsHandler_: ClaimAllocationOutboxEventsHandler
+  private readonly markAllocationOutboxPublishedHandler_: MarkAllocationOutboxPublishedHandler
+  private readonly failAllocationOutboxEventHandler_: FailAllocationOutboxEventHandler
+  private readonly redriveAllocationOutboxEventHandler_: RedriveAllocationOutboxEventHandler
 
   constructor({ baseRepository }: InjectedDependencies) {
     super(...arguments)
@@ -106,6 +129,17 @@ class FlashSaleAllocationModuleService extends MedusaService({
     this.reconcileAllocationHandler_ = new ReconcileAllocationHandler(
       new PostgresAllocationReconciliationStore(baseRepository)
     )
+    const outboxStore = new PostgresAllocationOutboxStore(baseRepository)
+    this.activateAllocationOutboxHandler_ =
+      new ActivateAllocationOutboxHandler(outboxStore)
+    this.claimAllocationOutboxEventsHandler_ =
+      new ClaimAllocationOutboxEventsHandler(outboxStore)
+    this.markAllocationOutboxPublishedHandler_ =
+      new MarkAllocationOutboxPublishedHandler(outboxStore)
+    this.failAllocationOutboxEventHandler_ =
+      new FailAllocationOutboxEventHandler(outboxStore)
+    this.redriveAllocationOutboxEventHandler_ =
+      new RedriveAllocationOutboxEventHandler(outboxStore)
   }
 
   async claimAttempt(
@@ -192,6 +226,36 @@ class FlashSaleAllocationModuleService extends MedusaService({
     command: ReconcileAllocationCommand
   ): Promise<ReconcileAllocationResult> {
     return await this.reconcileAllocationHandler_.execute(command)
+  }
+
+  async activateAllocationOutbox(
+    command: ActivateAllocationOutboxCommand
+  ): Promise<ActivateAllocationOutboxResult> {
+    return await this.activateAllocationOutboxHandler_.execute(command)
+  }
+
+  async claimAllocationOutboxEvents(
+    command: ClaimAllocationOutboxEventsCommand
+  ): Promise<ClaimAllocationOutboxEventsResult> {
+    return await this.claimAllocationOutboxEventsHandler_.execute(command)
+  }
+
+  async markAllocationOutboxPublished(
+    command: MarkAllocationOutboxPublishedCommand
+  ): Promise<AllocationOutboxMutationResult> {
+    return await this.markAllocationOutboxPublishedHandler_.execute(command)
+  }
+
+  async failAllocationOutboxEvent(
+    command: FailAllocationOutboxEventCommand
+  ): Promise<AllocationOutboxMutationResult> {
+    return await this.failAllocationOutboxEventHandler_.execute(command)
+  }
+
+  async redriveAllocationOutboxEvent(
+    command: RedriveAllocationOutboxEventCommand
+  ): Promise<AllocationOutboxMutationResult> {
+    return await this.redriveAllocationOutboxEventHandler_.execute(command)
   }
 
   private rejectDirectWrite(): never {
@@ -372,6 +436,64 @@ class FlashSaleAllocationModuleService extends MedusaService({
 
   // @ts-expect-error The generated Medusa write method is intentionally disabled.
   async restoreAllocationCampaignFences(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async createAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async updateAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async deleteAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async softDeleteAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async restoreAllocationOutboxEvents(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async createAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async updateAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async deleteAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async softDeleteAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async restoreAllocationOutboxControls(): Promise<never> {
     return this.rejectDirectWrite()
   }
 }

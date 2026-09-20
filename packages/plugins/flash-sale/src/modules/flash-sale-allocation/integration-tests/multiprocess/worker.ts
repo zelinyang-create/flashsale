@@ -9,20 +9,28 @@ import {
 import * as readline from "readline"
 import {
   ClaimAndHoldQuotaHandler,
+  ClaimAllocationOutboxEventsHandler,
   ConsumeQuotaSettlementHandler,
   ExpireDueQuotaHandler,
   ExpireQuotaHandler,
+  FailAllocationOutboxEventHandler,
+  MarkAllocationOutboxPublishedHandler,
   ReleaseQuotaSettlementHandler,
 } from "../../application"
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../../models"
-import { PostgresAllocationAttemptStore } from "../../persistence"
+import {
+  PostgresAllocationAttemptStore,
+  PostgresAllocationOutboxStore,
+} from "../../persistence"
 import {
   MULTIPROCESS_PROTOCOL_PREFIX,
   MultiprocessOperation,
@@ -61,6 +69,8 @@ async function main() {
       schema: process.env.FLASH_SALE_MP_SCHEMA ?? "public",
       entities: [
         toMikroORMEntity(AllocationCampaignFence),
+        toMikroORMEntity(AllocationOutboxControl),
+        toMikroORMEntity(AllocationOutboxEvent),
         toMikroORMEntity(AllocationPolicy),
         toMikroORMEntity(Capacity),
         toMikroORMEntity(PurchaseAttempt),
@@ -80,6 +90,12 @@ async function main() {
   const releaseSettlement = new ReleaseQuotaSettlementHandler(store)
   const expire = new ExpireQuotaHandler(store)
   const expireDue = new ExpireDueQuotaHandler(store)
+  const outboxStore = new PostgresAllocationOutboxStore(repository)
+  const claimOutbox = new ClaimAllocationOutboxEventsHandler(outboxStore)
+  const markOutboxPublished = new MarkAllocationOutboxPublishedHandler(
+    outboxStore
+  )
+  const failOutbox = new FailAllocationOutboxEventHandler(outboxStore)
 
   async function execute(
     operation: MultiprocessOperation
@@ -110,6 +126,40 @@ async function main() {
           hold_states: [],
           replayed: false,
           ...value,
+        }
+      }
+      if (operation.kind === "claim_outbox") {
+        const value = await claimOutbox.execute(operation.command)
+        return {
+          outcome: "fulfilled",
+          attempt_id: "",
+          attempt_state: "outbox_batch",
+          hold_states: [],
+          replayed: false,
+          event_ids: value.events.map((event) => event.id),
+          outbox_events: value.events.map((event) => ({
+            id: event.id,
+            lease_epoch: event.lease_epoch,
+            lease_owner: event.lease_owner,
+          })),
+        }
+      }
+      if (
+        operation.kind === "mark_outbox_published" ||
+        operation.kind === "fail_outbox"
+      ) {
+        const value =
+          operation.kind === "mark_outbox_published"
+            ? await markOutboxPublished.execute(operation.command)
+            : await failOutbox.execute(operation.command)
+        return {
+          outcome: "fulfilled",
+          attempt_id: "",
+          attempt_state: "outbox_mutation",
+          hold_states: [],
+          replayed: false,
+          event_ids: value.event ? [value.event.id] : [],
+          disposition: value.disposition,
         }
       }
       const value =

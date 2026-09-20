@@ -11,6 +11,8 @@ import {
 import {
   AllocationCampaignFence,
   AllocationHold,
+  AllocationOutboxControl,
+  AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
   PurchaseAttempt,
@@ -34,6 +36,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   dbName: "medusa-flash-sale-allocation",
   moduleModels: [
     AllocationCampaignFence,
+    AllocationOutboxControl,
+    AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
     PurchaseAttempt,
@@ -204,7 +208,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     }
 
     describe("Flash-sale allocation schema", () => {
-      it("installs all six tables from generated migrations", async () => {
+      it("installs all eight Allocation-owned tables from generated migrations", async () => {
         const rows = (await execute(
           `select tablename
              from pg_tables
@@ -216,6 +220,8 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         expect(rows.map((row) => row.tablename)).toEqual([
           "flash_sale_allocation_campaign_fence",
           "flash_sale_allocation_hold",
+          "flash_sale_allocation_outbox_control",
+          "flash_sale_allocation_outbox_event",
           "flash_sale_allocation_policy",
           "flash_sale_capacity",
           "flash_sale_purchase_attempt",
@@ -531,6 +537,18 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "deleteAllocationCampaignFences",
           "softDeleteAllocationCampaignFences",
           "restoreAllocationCampaignFences",
+          "createAllocationOutboxEvents",
+          "updateAllocationOutboxEvents",
+          "upsertAllocationOutboxEvents",
+          "deleteAllocationOutboxEvents",
+          "softDeleteAllocationOutboxEvents",
+          "restoreAllocationOutboxEvents",
+          "createAllocationOutboxControls",
+          "updateAllocationOutboxControls",
+          "upsertAllocationOutboxControls",
+          "deleteAllocationOutboxControls",
+          "softDeleteAllocationOutboxControls",
+          "restoreAllocationOutboxControls",
         ] as const
 
         for (const methodName of methodNames) {

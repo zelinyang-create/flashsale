@@ -105,6 +105,14 @@ fences as materialized (
   from flash_sale_allocation_campaign_fence f, audit_input i
   where i.campaign_id is null or f.campaign_id = i.campaign_id
 ),
+outbox_control as materialized (
+  select required_after from flash_sale_allocation_outbox_control
+  where id = 'allocation-outbox-required' and deleted_at is null
+),
+outbox_events as materialized (
+  select e.* from flash_sale_allocation_outbox_event e
+  where e.deleted_at is null and e.aggregate_type = 'purchase_attempt'
+),
 capacity_hold_totals as materialized (
   select h.capacity_id,
          coalesce(sum(h.quantity) filter (where h.state = 'held'), 0) as held,
@@ -330,6 +338,33 @@ issues as materialized (
   }', 'capacity', c.id
   from capacities c join fences f on f.campaign_id = c.scope_campaign_id
   where c.deleted_at is null and f.deleted_at is null and c.state in ('prepared', 'open')
+  union all
+  select '${
+    AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_MISSING
+  }', 'attempt', a.id
+  from attempts a cross join outbox_control o
+  where a.deleted_at is null and a.state <> 'pending'
+    and a.updated_at >= o.required_after
+    and not exists (
+      select 1 from outbox_events e
+       where e.aggregate_id = a.id and e.aggregate_version = a.version)
+  union all
+  select '${
+    AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_NAME_MISMATCH
+  }', 'attempt', a.id
+  from attempts a cross join outbox_control o
+  join outbox_events e
+    on e.aggregate_id = a.id and e.aggregate_version = a.version
+  where a.deleted_at is null and a.state <> 'pending'
+    and a.updated_at >= o.required_after
+    and e.event_name <> case a.state
+      when 'quota_held' then 'flash_sale.quota.held.v1'
+      when 'quota_rejected' then 'flash_sale.quota.rejected.v1'
+      when 'quota_committing' then 'flash_sale.quota.settlement_started.v1'
+      when 'quota_consumed' then 'flash_sale.quota.consumed.v1'
+      when 'quota_released' then 'flash_sale.quota.released.v1'
+      when 'quota_expired' then 'flash_sale.quota.expired.v1'
+    end
 ),
 counts as (
   select issue_code, count(*)::int as issue_count

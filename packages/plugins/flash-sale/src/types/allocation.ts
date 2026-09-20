@@ -27,6 +27,49 @@ export enum AllocationHoldState {
   EXPIRED = "expired",
 }
 
+export enum AllocationOutboxStatus {
+  PENDING = "pending",
+  PUBLISHING = "publishing",
+  PUBLISHED = "published",
+  DEAD_LETTER = "dead_letter",
+}
+
+export type AllocationOutboxEventDTO = {
+  id: string
+  event_name: string
+  schema_version: number
+  aggregate_type: string
+  aggregate_id: string
+  aggregate_version: number
+  event_hash: string
+  payload: Record<string, unknown>
+  status: AllocationOutboxStatus
+  available_at: Date
+  occurred_at: Date
+  published_at: Date | null
+  attempt_count: number
+  max_attempts: number | null
+  lease_owner: string | null
+  lease_until: Date | null
+  lease_epoch: number
+  published_by: string | null
+  published_lease_epoch: number | null
+  last_error_code: string | null
+  dead_lettered_at: Date | null
+  redrive_count: number
+  created_at: Date
+  updated_at: Date
+  deleted_at: Date | null
+}
+
+export type AllocationOutboxControlDTO = {
+  id: string
+  required_after: Date
+  created_at: Date
+  updated_at: Date
+  deleted_at: Date | null
+}
+
 export enum AllocationFenceDisposition {
   CANCELLED = "cancelled",
   ENDED = "ended",
