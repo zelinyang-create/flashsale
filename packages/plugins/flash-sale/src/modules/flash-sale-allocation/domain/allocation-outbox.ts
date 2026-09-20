@@ -1,22 +1,27 @@
-import { createHash } from "crypto"
 import { PurchaseAttemptState } from "../../../types"
+import {
+  ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+  ALLOCATION_OUTBOX_MAX_PAYLOAD_BYTES,
+  ALLOCATION_OUTBOX_SCHEMA_VERSION,
+  AllocationOutboxEventNameValue,
+  AllocationOutboxEventName,
+  canonicalJson,
+  compareUtf16CodeUnits,
+  hashAllocationEventIdentity,
+} from "../../../shared/allocation-outbox-envelope"
 import {
   ClaimedAllocationHold,
   ClaimedPurchaseAttempt,
 } from "../application/contracts"
 
-export const ALLOCATION_OUTBOX_AGGREGATE_TYPE = "purchase_attempt" as const
-export const ALLOCATION_OUTBOX_SCHEMA_VERSION = 1 as const
-export const ALLOCATION_OUTBOX_MAX_PAYLOAD_BYTES = 65_536
-
-export const AllocationOutboxEventName = {
-  QUOTA_HELD: "flash_sale.quota.held.v1",
-  QUOTA_REJECTED: "flash_sale.quota.rejected.v1",
-  QUOTA_COMMITTING: "flash_sale.quota.settlement_started.v1",
-  QUOTA_CONSUMED: "flash_sale.quota.consumed.v1",
-  QUOTA_RELEASED: "flash_sale.quota.released.v1",
-  QUOTA_EXPIRED: "flash_sale.quota.expired.v1",
-} as const
+export {
+  ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+  ALLOCATION_OUTBOX_MAX_PAYLOAD_BYTES,
+  ALLOCATION_OUTBOX_SCHEMA_VERSION,
+  AllocationOutboxEventName,
+  canonicalJson,
+  compareUtf16CodeUnits,
+}
 
 export type AllocationOutboxReleaseKind =
   | "held_cancel"
@@ -37,7 +42,7 @@ export type AllocationOutboxPayload = Readonly<{
 }>
 
 export type AllocationOutboxEnvelope = Readonly<{
-  event_name: string
+  event_name: AllocationOutboxEventNameValue
   schema_version: typeof ALLOCATION_OUTBOX_SCHEMA_VERSION
   aggregate_type: typeof ALLOCATION_OUTBOX_AGGREGATE_TYPE
   aggregate_id: string
@@ -51,12 +56,6 @@ export class AllocationOutboxValidationError extends Error {
     super(message)
     this.name = "AllocationOutboxValidationError"
   }
-}
-
-// ECMAScript relational comparison is a locale-independent lexicographic
-// comparison of UTF-16 code units. Do not replace this with localeCompare.
-export function compareUtf16CodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0
 }
 
 const SENSITIVE_KEYS = new Set([
@@ -73,20 +72,6 @@ const SENSITIVE_KEYS = new Set([
   "raw_error",
   "subject_id",
 ])
-
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value)
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`
-  }
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-    .join(",")}}`
-}
 
 function assertPayloadSafe(value: unknown, path = "payload"): void {
   if (Array.isArray(value)) {
@@ -118,7 +103,9 @@ export function validateAllocationOutboxPayload(
   }
 }
 
-function eventNameFor(state: PurchaseAttemptState): string {
+function eventNameFor(
+  state: PurchaseAttemptState
+): AllocationOutboxEventNameValue {
   switch (state) {
     case PurchaseAttemptState.QUOTA_HELD:
       return AllocationOutboxEventName.QUOTA_HELD
@@ -208,8 +195,6 @@ export function buildAllocationOutboxEnvelope(
   }
   return {
     ...identity,
-    event_hash: createHash("sha256")
-      .update(canonicalJson(identity), "utf8")
-      .digest("hex"),
+    event_hash: hashAllocationEventIdentity(identity),
   }
 }

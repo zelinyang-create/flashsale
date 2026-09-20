@@ -869,15 +869,43 @@ Item ID 使用 UTF-16 code-unit 字典序（显式 `<`/`>`，不使用 locale-se
 `QUOTA_RELEASED` Payload 区分 `held_cancel` 与 `settlement_release`。Payload 不保存 Subject、Idempotency/
 Request/Command 值或摘要、Token、Worker/Lease、Payment 或原始异常。
 
-### 16.2 Phase 1F-A 尚未实现
+### 16.2 Phase 1F-B1 已实现：Allocation Redis Dispatcher
 
-当前没有 EventBus/Broker Dispatcher、调度 Job、Broker Ack 集成、Consumer Inbox、Webhook Inbox 或消费者
-幂等。因此 Phase 1F-A 只保证“业务事实与待发布行原子持久化”和数据库内安全认领，**不保证事件已经离开数据库，
-也不宣称端到端 At-least-once Delivery**。未来 Publisher 必须在真实 Broker Ack 后才调用 fenced Published 命令；
-Ack 后崩溃造成的重复发送，再由未来 Consumer Inbox 处理。
+生产 Dispatcher 只通过 Allocation 的公开 exact commands 工作：短事务 Claim 后立即释放 PostgreSQL 行锁，
+在事务外调用 EventBus；只有 `@medusajs/event-bus-redis` 的 `emit` 成功返回后才执行带 Worker/Epoch 的 fenced Mark。
+Redis Provider 的返回仅表示 BullMQ Queue 已接受，不表示 Subscriber 已成功。若接受之后 Mark 超时、抛错或进程
+崩溃，事件保持 `PUBLISHING`，Lease 到期后以同一 Event ID/Hash 重投；绝不在已收到接受回执后调用 Failure 命令。
 
-目标态的准确承诺是：事件允许重复投递，同一 Consumer 对同一 Event 的数据库业务效果最多提交一次。此承诺要等
-Dispatcher 与 Consumer Inbox 完成后才成立。
+Dispatcher 默认禁用，启用前同时检查 Worker/Shared Mode、Redis Provider 明确声明、全部六种 Canonical Event 与
+Exact Subscriber ID Manifest，以及 `mark budget + safety margin < lease`。事件名不能重映射，Wildcard 也不能代替
+逐事件 Exact Registration。Local/Unknown/Custom Provider、Server Mode、缺失/未知 Subscriber 或不安全预算都会在
+Claim 前 Fail Closed，因此零事件被认领。
+每个 Tick 最多 Claim `concurrency` 个事件并立刻并发处理，`allSettled` 隔离 Poison Event；进程内 overlap guard 只用于
+削峰，正确性仍来自数据库 Lease/Fencing。EventBus 网络等待期间不持有 PostgreSQL Outbox 行锁。
+
+测试工程另有一个明确标注为 **test-only probe** 的 Consumer Module。它独占自己的 Inbox、Projection Cursor 和
+Effect 表；Subscriber 对完整 Envelope 做严格 Schema/Canonical Hash 验证，并在单个本地事务内写 Inbox、业务 Effect
+和 Cursor。完全相同的重复 Event 会增加 Delivery Count 但不重复 Effect；同 Event ID 漂移、同 Aggregate Version
+冲突、Version Gap 和未知旧版本均 Fail Closed。它证明了一个具体 Consumer 的本地 Effect Deduplication，不会随生产
+Plugin 注册，也不是通用 Production Inbox。
+
+真实 Redis/PG Full-app Fixture 已覆盖：正常接受后 `PUBLISHED`；接受后、Mark 前崩溃导致同 ID/Hash 重投且 Effect
+只提交一次；Redis 网络中断时 Pending `emit` 不写 `PUBLISHED`、不持 PG 行锁，恢复后原 Owner 被 Epoch Fence，
+Takeover 重投排空；Inbox 两个事务 Failpoint 全回滚；100 路同事件并发只有一个 Effect。Fixture 使用唯一 Queue、OS
+动态 Proxy 端口，要求显式 `FLASH_SALE_TEST_REDIS_URL`；Proxy 晚于 Medusa/EventBus 关闭，不回退 Local Provider，
+也不会对共享 Redis 执行 `FLUSH*`。
+
+### 16.3 Phase 1F-B1 尚未保证
+
+Phase 1F-B1 不把 Redis Queue Acceptance 误称为 Subscriber Success，也不保证 Redis 基础设施的持久化策略、HA、
+跨 Region 灾备或运维质量；Production Consumer Inbox、Checkout Outbox、Webhook Inbox/Dedup、死信运维 API、通用
+Schema Registry 和端到端业务完成 SLA 仍未实现。Redis reconnecting `emit` 没有外层 Deadline；断线可能让一个 Tick
+持续 Pending，进程内 Overlap Guard 限制并发，而跨进程恢复依赖数据库 Lease/Fencing。晚到 Acceptance 仍可能产生
+重复投递；稳定 Event ID/Hash 与 Consumer Inbox 正是必需条件。系统只声明有条件的 At-least-once 发布尝试，
+**不声明 Exactly-once Delivery**。
+
+当前仅实现每 Tick 一条低敏感度结构化计数日志；Backlog/Oldest-age、Publish Latency、Retry/Dead/Fenced Metrics 留待
+后续阶段，Phase 1F-B1 不宣称已有完整可观测性。
 
 补偿必须按当前事实决定：
 
@@ -1277,15 +1305,15 @@ Nightly/Release Candidate：多实例并发、Failpoint、Toxiproxy、No/Fixed/A
 ### Phase 1：MVP 正确性内核，约两周
 
 Plugin、Campaign、Attempt、Hold、条件 Quota Claim、Idempotency、Checkout Composition、Expiry、Reconciliation、
-Allocation Outbox 原子 Producer/数据库投递状态机和两实例并发测试。Broker Dispatcher 与 Consumer Inbox 不属于
-当前 Phase 1F-A 交付。
+Allocation Outbox 原子 Producer/数据库投递状态机、Redis Queue Acceptance Dispatcher、两实例并发测试，以及
+test-only Transactional Inbox/Effect Probe。Production Consumer Inbox 与 Checkout Outbox 不属于当前 1F-B1 交付。
 
 退出条件：Quota 50、500 并发、10 轮零超发、零重复、零对账差异。
 
 ### Phase 2：高级可靠性，约两周
 
-Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Outbox Broker Dispatcher、
-Consumer/Webhook Inbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
+Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Production Consumer/Webhook
+Inbox、Checkout Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

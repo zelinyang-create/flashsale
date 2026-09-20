@@ -24,6 +24,10 @@ import {
 } from "../models"
 import { PostgresAllocationAttemptStore } from "../persistence"
 import FlashSaleAllocationModuleService from "../service"
+import {
+  AllocationOutboxDispatcher,
+  AllocationOutboxDispatcherConfig,
+} from "../../../orchestration/allocation-outbox"
 
 jest.setTimeout(240000)
 
@@ -565,6 +569,67 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       })
       expect(claimed.events.map((event) => event.id)).toContain(healthy.id)
       expect(claimed.events.map((event) => event.id)).not.toContain(blockedTail.id)
+    })
+
+    it("holds no PostgreSQL outbox row lock while the network publish is pending", async () => {
+      await service.activateAllocationOutbox({})
+      const fixture = await seed()
+      const held = await service.claimAndHoldQuota(
+        command(fixture.campaignId, fixture.itemId)
+      )
+      if (held.status !== "held") throw new Error("expected held quota")
+
+      let enterPublish!: () => void
+      let releasePublish!: () => void
+      const publishing = new Promise<void>((resolve) => {
+        enterPublish = resolve
+      })
+      const release = new Promise<void>((resolve) => {
+        releasePublish = resolve
+      })
+      const subscriberManifest = {
+        "flash_sale.quota.held.v1": ["allocation-consumer-v1"],
+      }
+      const dispatcher = new AllocationOutboxDispatcher(
+        service,
+        {
+          assertReady: () => undefined,
+          publish: async () => {
+            enterPublish()
+            await release
+            return { accepted: true, provider: "medusa-redis-event-bus" }
+          },
+        },
+        {
+          enabled: true,
+          concurrency: 1,
+          lease_seconds: 30,
+          max_attempts: 3,
+          retry_after_seconds: 1,
+          mark_timeout_ms: 1_000,
+          safety_margin_ms: 1_000,
+          subscriber_manifest: subscriberManifest,
+        } as AllocationOutboxDispatcherConfig,
+        "network-lock-worker"
+      )
+
+      const tick = dispatcher.runTick()
+      await publishing
+      const rows = await outboxRows(held.attempt.id)
+      expect(rows[0].status).toBe(AllocationOutboxStatus.PUBLISHING)
+      await expect(
+        MikroOrmWrapper.forkManager().execute(
+          `select id from flash_sale_allocation_outbox_event
+            where id = ? for update nowait`,
+          [rows[0].id]
+        )
+      ).resolves.toHaveLength(1)
+      releasePublish()
+      await expect(tick).resolves.toMatchObject({
+        claimed: 1,
+        accepted: 1,
+        published: 1,
+      })
     })
 
     it("uses a fresh DB clock after a blocked row lock before publishing", async () => {
