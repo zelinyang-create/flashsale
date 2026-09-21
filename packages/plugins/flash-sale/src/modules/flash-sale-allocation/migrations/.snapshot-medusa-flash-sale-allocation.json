@@ -1525,6 +1525,558 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "activation_id": {
+          "name": "activation_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "capacity_id": {
+          "name": "capacity_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "campaign_item_id": {
+          "name": "campaign_item_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "shard_no": {
+          "name": "shard_no",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "opening_granted_quantity": {
+          "name": "opening_granted_quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "opening_available_quantity": {
+          "name": "opening_available_quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "opening_held_quantity": {
+          "name": "opening_held_quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "opening_consumed_quantity": {
+          "name": "opening_consumed_quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "capacity_version": {
+          "name": "capacity_version",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "activated_at": {
+          "name": "activated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "raw_opening_granted_quantity": {
+          "name": "raw_opening_granted_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "raw_opening_available_quantity": {
+          "name": "raw_opening_available_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "raw_opening_held_quantity": {
+          "name": "raw_opening_held_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "raw_opening_consumed_quantity": {
+          "name": "raw_opening_consumed_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "flash_sale_capacity_movement_checkpoint",
+      "schema": "public",
+      "indexes": [
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_checkpoint_capacity_id",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_checkpoint_capacity_id\" ON \"flash_sale_capacity_movement_checkpoint\" (\"capacity_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_checkpoint_deleted_at",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_checkpoint_deleted_at\" ON \"flash_sale_capacity_movement_checkpoint\" (\"deleted_at\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_movement_checkpoint_activation_capacity_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_movement_checkpoint_activation_capacity_unique\" ON \"flash_sale_capacity_movement_checkpoint\" (\"activation_id\", \"capacity_id\")"
+        },
+        {
+          "keyName": "IDX_flash_sale_movement_checkpoint_route_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_movement_checkpoint_route_unique\" ON \"flash_sale_capacity_movement_checkpoint\" (\"activation_id\", \"campaign_item_id\", \"shard_no\")"
+        },
+        {
+          "keyName": "flash_sale_capacity_movement_checkpoint_pkey",
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": true,
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "CK_flash_sale_movement_checkpoint_quantities",
+          "expression": "opening_granted_quantity > 0 AND opening_available_quantity >= 0 AND opening_held_quantity >= 0 AND opening_consumed_quantity >= 0 AND opening_available_quantity + opening_held_quantity + opening_consumed_quantity = opening_granted_quantity",
+          "definition": "check ((opening_granted_quantity > 0 AND opening_available_quantity >= 0 AND opening_held_quantity >= 0 AND opening_consumed_quantity >= 0 AND opening_available_quantity + opening_held_quantity + opening_consumed_quantity = opening_granted_quantity))"
+        },
+        {
+          "name": "CK_flash_sale_movement_checkpoint_version",
+          "expression": "capacity_version >= 1 AND shard_no >= 0",
+          "definition": "check ((capacity_version >= 1 AND shard_no >= 0))"
+        },
+        {
+          "name": "CK_flash_sale_movement_checkpoint_identity",
+          "expression": "char_length(activation_id) BETWEEN 1 AND 255 AND char_length(campaign_item_id) BETWEEN 1 AND 255",
+          "definition": "check ((char_length(activation_id) BETWEEN 1 AND 255 AND char_length(campaign_item_id) BETWEEN 1 AND 255))"
+        }
+      ],
+      "foreignKeys": {
+        "flash_sale_capacity_movement_checkpoint_capacity_id_foreign": {
+          "constraintName": "flash_sale_capacity_movement_checkpoint_capacity_id_foreign",
+          "columnNames": [
+            "capacity_id"
+          ],
+          "localTableName": "public.flash_sale_capacity_movement_checkpoint",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "referencedTableName": "public.flash_sale_capacity",
+          "updateRule": "cascade"
+        }
+      },
+      "nativeEnums": {}
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "activation_id": {
+          "name": "activation_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "required_after": {
+          "name": "required_after",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "checkpoint_digest": {
+          "name": "checkpoint_digest",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "flash_sale_capacity_movement_control",
+      "schema": "public",
+      "indexes": [
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_control_deleted_at",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_control_deleted_at\" ON \"flash_sale_capacity_movement_control\" (\"deleted_at\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_movement_control_activation_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_movement_control_activation_unique\" ON \"flash_sale_capacity_movement_control\" (\"activation_id\")"
+        },
+        {
+          "keyName": "flash_sale_capacity_movement_control_pkey",
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": true,
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "CK_flash_sale_movement_control_singleton",
+          "expression": "id = 'allocation-movement-ledger'",
+          "definition": "check ((id = 'allocation-movement-ledger'))"
+        },
+        {
+          "name": "CK_flash_sale_movement_control_schema",
+          "expression": "schema_version >= 1 AND char_length(activation_id) BETWEEN 1 AND 255 AND checkpoint_digest ~ '^[0-9a-f]{64}$'",
+          "definition": "check ((schema_version >= 1 AND char_length(activation_id) BETWEEN 1 AND 255 AND checkpoint_digest ~ '^[0-9a-f]{64}$'))"
+        }
+      ],
+      "foreignKeys": {},
+      "nativeEnums": {}
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "allocation_policy_id": {
           "name": "allocation_policy_id",
           "type": "text",
@@ -1917,6 +2469,392 @@
             "id"
           ],
           "referencedTableName": "public.flash_sale_allocation_policy",
+          "updateRule": "cascade"
+        }
+      },
+      "nativeEnums": {}
+    },
+    {
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": true,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "capacity_id": {
+          "name": "capacity_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "campaign_item_id": {
+          "name": "campaign_item_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "transition_version": {
+          "name": "transition_version",
+          "type": "integer",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "integer"
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [
+            "hold",
+            "consume",
+            "release",
+            "expire"
+          ],
+          "mappedType": "enum"
+        },
+        "from_bucket": {
+          "name": "from_bucket",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [
+            "available",
+            "held",
+            "consumed"
+          ],
+          "mappedType": "enum"
+        },
+        "to_bucket": {
+          "name": "to_bucket",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [
+            "available",
+            "held",
+            "consumed"
+          ],
+          "mappedType": "enum"
+        },
+        "quantity": {
+          "name": "quantity",
+          "type": "numeric",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "decimal"
+        },
+        "fence_token": {
+          "name": "fence_token",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "raw_quantity": {
+          "name": "raw_quantity",
+          "type": "jsonb",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "json"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": "now()",
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        }
+      },
+      "name": "flash_sale_capacity_movement",
+      "schema": "public",
+      "indexes": [
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_capacity_id",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_capacity_id\" ON \"flash_sale_capacity_movement\" (\"capacity_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_attempt_id",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_attempt_id\" ON \"flash_sale_capacity_movement\" (\"attempt_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_capacity_movement_deleted_at",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_capacity_movement_deleted_at\" ON \"flash_sale_capacity_movement\" (\"deleted_at\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_flash_sale_movement_attempt_item_transition_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_flash_sale_movement_attempt_item_transition_unique\" ON \"flash_sale_capacity_movement\" (\"attempt_id\", \"campaign_item_id\", \"transition_version\")"
+        },
+        {
+          "keyName": "IDX_flash_sale_movement_capacity_created",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE INDEX IF NOT EXISTS \"IDX_flash_sale_movement_capacity_created\" ON \"flash_sale_capacity_movement\" (\"capacity_id\", \"created_at\", \"id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "flash_sale_capacity_movement_pkey",
+          "columnNames": [
+            "id"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": true,
+          "unique": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "CK_flash_sale_movement_transition_version",
+          "expression": "transition_version >= 1",
+          "definition": "check ((transition_version >= 1))"
+        },
+        {
+          "name": "CK_flash_sale_movement_quantity",
+          "expression": "quantity > 0",
+          "definition": "check ((quantity > 0))"
+        },
+        {
+          "name": "CK_flash_sale_movement_fence_token",
+          "expression": "fence_token ~ '^[0-9a-f]{64}$'",
+          "definition": "check ((fence_token ~ '^[0-9a-f]{64}$'))"
+        },
+        {
+          "name": "CK_flash_sale_movement_bounded_identity",
+          "expression": "char_length(campaign_id) BETWEEN 1 AND 255 AND char_length(subject_id) BETWEEN 1 AND 255 AND char_length(campaign_item_id) BETWEEN 1 AND 255",
+          "definition": "check ((char_length(campaign_id) BETWEEN 1 AND 255 AND char_length(subject_id) BETWEEN 1 AND 255 AND char_length(campaign_item_id) BETWEEN 1 AND 255))"
+        },
+        {
+          "name": "CK_flash_sale_movement_route",
+          "expression": "(kind = 'hold' AND from_bucket = 'available' AND to_bucket = 'held') OR (kind = 'consume' AND from_bucket = 'held' AND to_bucket = 'consumed') OR (kind IN ('release', 'expire') AND from_bucket = 'held' AND to_bucket = 'available')",
+          "definition": "check (((kind = 'hold' AND from_bucket = 'available' AND to_bucket = 'held') OR (kind = 'consume' AND from_bucket = 'held' AND to_bucket = 'consumed') OR (kind IN ('release', 'expire') AND from_bucket = 'held' AND to_bucket = 'available')))"
+        }
+      ],
+      "foreignKeys": {
+        "flash_sale_capacity_movement_capacity_id_foreign": {
+          "constraintName": "flash_sale_capacity_movement_capacity_id_foreign",
+          "columnNames": [
+            "capacity_id"
+          ],
+          "localTableName": "public.flash_sale_capacity_movement",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "referencedTableName": "public.flash_sale_capacity",
+          "updateRule": "cascade"
+        },
+        "flash_sale_capacity_movement_attempt_id_foreign": {
+          "constraintName": "flash_sale_capacity_movement_attempt_id_foreign",
+          "columnNames": [
+            "attempt_id"
+          ],
+          "localTableName": "public.flash_sale_capacity_movement",
+          "referencedColumnNames": [
+            "id"
+          ],
+          "referencedTableName": "public.flash_sale_purchase_attempt",
           "updateRule": "cascade"
         }
       },

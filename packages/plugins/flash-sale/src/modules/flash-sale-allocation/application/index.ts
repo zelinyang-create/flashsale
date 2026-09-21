@@ -1,5 +1,6 @@
 export * from "./allocation-command"
 export * from "./allocation-outbox"
+export * from "./capacity-movement-ledger"
 export * from "./claim-attempt"
 export * from "./contracts"
 export * from "./control-plane"

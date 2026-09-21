@@ -1,4 +1,5 @@
 export * from "./postgres-allocation-attempt-store"
 export * from "./allocation-outbox-producer"
 export * from "./postgres-allocation-outbox-store"
+export * from "./postgres-capacity-movement-ledger-store"
 export * from "./postgres-allocation-reconciliation-store"

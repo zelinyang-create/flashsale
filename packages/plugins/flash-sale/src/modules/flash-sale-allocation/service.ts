@@ -47,6 +47,9 @@ import {
   RedriveAllocationOutboxEventCommand,
   RedriveAllocationOutboxEventHandler,
   AllocationOutboxMutationResult,
+  ActivateAllocationMovementLedgerCommand,
+  ActivateAllocationMovementLedgerHandler,
+  ActivateAllocationMovementLedgerResult,
 } from "./application"
 import {
   AllocationCampaignFence,
@@ -55,6 +58,9 @@ import {
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityMovement,
+  CapacityMovementCheckpoint,
+  CapacityMovementControl,
   PurchaseAttempt,
   SubjectAllocation,
 } from "./models"
@@ -62,6 +68,7 @@ import {
   PostgresAllocationAttemptStore,
   PostgresAllocationOutboxStore,
   PostgresAllocationReconciliationStore,
+  PostgresCapacityMovementLedgerStore,
 } from "./persistence"
 
 type InjectedDependencies = {
@@ -77,6 +84,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityMovement,
+  CapacityMovementCheckpoint,
+  CapacityMovementControl,
   PurchaseAttempt,
   AllocationHold,
   SubjectAllocation,
@@ -101,6 +111,7 @@ class FlashSaleAllocationModuleService extends MedusaService({
   private readonly markAllocationOutboxPublishedHandler_: MarkAllocationOutboxPublishedHandler
   private readonly failAllocationOutboxEventHandler_: FailAllocationOutboxEventHandler
   private readonly redriveAllocationOutboxEventHandler_: RedriveAllocationOutboxEventHandler
+  private readonly activateAllocationMovementLedgerHandler_: ActivateAllocationMovementLedgerHandler
 
   constructor({ baseRepository }: InjectedDependencies) {
     super(...arguments)
@@ -130,8 +141,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
       new PostgresAllocationReconciliationStore(baseRepository)
     )
     const outboxStore = new PostgresAllocationOutboxStore(baseRepository)
-    this.activateAllocationOutboxHandler_ =
-      new ActivateAllocationOutboxHandler(outboxStore)
+    this.activateAllocationOutboxHandler_ = new ActivateAllocationOutboxHandler(
+      outboxStore
+    )
     this.claimAllocationOutboxEventsHandler_ =
       new ClaimAllocationOutboxEventsHandler(outboxStore)
     this.markAllocationOutboxPublishedHandler_ =
@@ -140,6 +152,10 @@ class FlashSaleAllocationModuleService extends MedusaService({
       new FailAllocationOutboxEventHandler(outboxStore)
     this.redriveAllocationOutboxEventHandler_ =
       new RedriveAllocationOutboxEventHandler(outboxStore)
+    this.activateAllocationMovementLedgerHandler_ =
+      new ActivateAllocationMovementLedgerHandler(
+        new PostgresCapacityMovementLedgerStore(baseRepository)
+      )
   }
 
   async claimAttempt(
@@ -256,6 +272,12 @@ class FlashSaleAllocationModuleService extends MedusaService({
     command: RedriveAllocationOutboxEventCommand
   ): Promise<AllocationOutboxMutationResult> {
     return await this.redriveAllocationOutboxEventHandler_.execute(command)
+  }
+
+  async activateAllocationMovementLedger(
+    command: ActivateAllocationMovementLedgerCommand
+  ): Promise<ActivateAllocationMovementLedgerResult> {
+    return await this.activateAllocationMovementLedgerHandler_.execute(command)
   }
 
   private rejectDirectWrite(): never {
@@ -494,6 +516,93 @@ class FlashSaleAllocationModuleService extends MedusaService({
 
   // @ts-expect-error The generated Medusa write method is intentionally disabled.
   async restoreAllocationOutboxControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async createCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async updateCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async deleteCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async softDeleteCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async restoreCapacityMovements(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async createCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async updateCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async deleteCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async softDeleteCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async restoreCapacityMovementCheckpoints(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async createCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async updateCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async deleteCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async softDeleteCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error The generated Medusa write method is intentionally disabled.
+  async restoreCapacityMovementControls(): Promise<never> {
     return this.rejectDirectWrite()
   }
 }

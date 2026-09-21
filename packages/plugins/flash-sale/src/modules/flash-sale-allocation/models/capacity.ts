@@ -2,6 +2,8 @@ import { model } from "@medusajs/framework/utils"
 import { CapacityState } from "../../../types"
 import AllocationHold from "./allocation-hold"
 import AllocationPolicy from "./allocation-policy"
+import CapacityMovement from "./capacity-movement"
+import CapacityMovementCheckpoint from "./capacity-movement-checkpoint"
 
 const Capacity = model
   .define(
@@ -20,6 +22,12 @@ const Capacity = model
       rules_version: model.number(),
       version: model.number().default(1),
       holds: model.hasMany(() => AllocationHold, {
+        mappedBy: "capacity",
+      }),
+      movements: model.hasMany(() => CapacityMovement, {
+        mappedBy: "capacity",
+      }),
+      movement_checkpoints: model.hasMany(() => CapacityMovementCheckpoint, {
         mappedBy: "capacity",
       }),
     }

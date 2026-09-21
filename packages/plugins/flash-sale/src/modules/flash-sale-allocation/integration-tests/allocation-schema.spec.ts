@@ -15,6 +15,9 @@ import {
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityMovement,
+  CapacityMovementCheckpoint,
+  CapacityMovementControl,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../models"
@@ -40,6 +43,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
+    CapacityMovement,
+    CapacityMovementCheckpoint,
+    CapacityMovementControl,
     PurchaseAttempt,
     AllocationHold,
     SubjectAllocation,
@@ -208,7 +214,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     }
 
     describe("Flash-sale allocation schema", () => {
-      it("installs all eight Allocation-owned tables from generated migrations", async () => {
+      it("installs all eleven Allocation-owned tables from generated migrations", async () => {
         const rows = (await execute(
           `select tablename
              from pg_tables
@@ -224,6 +230,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "flash_sale_allocation_outbox_event",
           "flash_sale_allocation_policy",
           "flash_sale_capacity",
+          "flash_sale_capacity_movement",
+          "flash_sale_capacity_movement_checkpoint",
+          "flash_sale_capacity_movement_control",
           "flash_sale_purchase_attempt",
           "flash_sale_subject_allocation",
         ])
@@ -250,6 +259,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "IDX_flash_sale_attempt_idempotency_unique",
           "IDX_flash_sale_hold_attempt_item_unique",
           "IDX_flash_sale_subject_campaign_subject_unique",
+          "IDX_flash_sale_movement_attempt_item_transition_unique",
+          "IDX_flash_sale_movement_checkpoint_activation_capacity_unique",
+          "IDX_flash_sale_movement_checkpoint_route_unique",
+          "IDX_flash_sale_movement_control_activation_unique",
         ]) {
           expect(definitions.get(index)).toContain("create unique index")
           expect(definitions.get(index)).not.toContain(" where ")
@@ -297,6 +310,18 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           {
             source_table: "flash_sale_capacity",
             target_table: "flash_sale_allocation_policy",
+          },
+          {
+            source_table: "flash_sale_capacity_movement",
+            target_table: "flash_sale_capacity",
+          },
+          {
+            source_table: "flash_sale_capacity_movement",
+            target_table: "flash_sale_purchase_attempt",
+          },
+          {
+            source_table: "flash_sale_capacity_movement_checkpoint",
+            target_table: "flash_sale_capacity",
           },
           {
             source_table: "flash_sale_purchase_attempt",
@@ -549,6 +574,24 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "deleteAllocationOutboxControls",
           "softDeleteAllocationOutboxControls",
           "restoreAllocationOutboxControls",
+          "createCapacityMovements",
+          "updateCapacityMovements",
+          "upsertCapacityMovements",
+          "deleteCapacityMovements",
+          "softDeleteCapacityMovements",
+          "restoreCapacityMovements",
+          "createCapacityMovementCheckpoints",
+          "updateCapacityMovementCheckpoints",
+          "upsertCapacityMovementCheckpoints",
+          "deleteCapacityMovementCheckpoints",
+          "softDeleteCapacityMovementCheckpoints",
+          "restoreCapacityMovementCheckpoints",
+          "createCapacityMovementControls",
+          "updateCapacityMovementControls",
+          "upsertCapacityMovementControls",
+          "deleteCapacityMovementControls",
+          "softDeleteCapacityMovementControls",
+          "restoreCapacityMovementControls",
         ] as const
 
         for (const methodName of methodNames) {

@@ -19,6 +19,9 @@ import {
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityMovement,
+  CapacityMovementCheckpoint,
+  CapacityMovementControl,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../models"
@@ -47,6 +50,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
+    CapacityMovement,
+    CapacityMovementCheckpoint,
+    CapacityMovementControl,
     PurchaseAttempt,
     AllocationHold,
     SubjectAllocation,
@@ -161,9 +167,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       const held = await service.claimAndHoldQuota(input)
       expect(held.status).toBe("held")
       if (held.status !== "held") throw new Error("expected held")
-      expect((await outboxRows(held.attempt.id)).map((row) => row.event_name)).toEqual([
-        "flash_sale.quota.held.v1",
-      ])
+      expect(
+        (await outboxRows(held.attempt.id)).map((row) => row.event_name)
+      ).toEqual(["flash_sale.quota.held.v1"])
       await service.claimAndHoldQuota(input)
       expect(await outboxRows(held.attempt.id)).toHaveLength(1)
 
@@ -185,7 +191,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         settlement_id: settlementId,
       })
       const rows = await outboxRows(held.attempt.id)
-      expect(rows.map((row) => [row.aggregate_version, row.event_name])).toEqual([
+      expect(
+        rows.map((row) => [row.aggregate_version, row.event_name])
+      ).toEqual([
         [2, "flash_sale.quota.held.v1"],
         [3, "flash_sale.quota.settlement_started.v1"],
         [4, "flash_sale.quota.consumed.v1"],
@@ -264,9 +272,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       if (canceled.status !== "held") throw new Error("expected held")
       await service.cancelHeldQuota({ attempt_id: canceled.attempt.id })
       const cancelRows = await outboxRows(canceled.attempt.id)
-      expect((cancelRows[1].payload as { release_kind: string }).release_kind).toBe(
-        "held_cancel"
-      )
+      expect(
+        (cancelRows[1].payload as { release_kind: string }).release_kind
+      ).toBe("held_cancel")
 
       const releaseFixture = await seed()
       const released = await service.claimAndHoldQuota(
@@ -310,7 +318,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
 
     it("fails closed on a missing activated replay event but exempts legacy rows", async () => {
       const legacyFixture = await seed()
-      const legacyInput = command(legacyFixture.campaignId, legacyFixture.itemId)
+      const legacyInput = command(
+        legacyFixture.campaignId,
+        legacyFixture.itemId
+      )
       const legacy = await service.claimAndHoldQuota(legacyInput)
       if (legacy.status !== "held") throw new Error("expected held")
       await service.activateAllocationOutbox({})
@@ -318,19 +329,26 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         "delete from flash_sale_allocation_outbox_event where aggregate_id = ?",
         [legacy.attempt.id]
       )
-      await expect(service.claimAndHoldQuota(legacyInput)).resolves.toMatchObject({
+      await expect(
+        service.claimAndHoldQuota(legacyInput)
+      ).resolves.toMatchObject({
         replayed: true,
       })
 
       const activeFixture = await seed()
-      const activeInput = command(activeFixture.campaignId, activeFixture.itemId)
+      const activeInput = command(
+        activeFixture.campaignId,
+        activeFixture.itemId
+      )
       const active = await service.claimAndHoldQuota(activeInput)
       if (active.status !== "held") throw new Error("expected held")
       await execute(
         "delete from flash_sale_allocation_outbox_event where aggregate_id = ?",
         [active.attempt.id]
       )
-      await expect(service.claimAndHoldQuota(activeInput)).rejects.toMatchObject({
+      await expect(
+        service.claimAndHoldQuota(activeInput)
+      ).rejects.toMatchObject({
         code: AllocationCommandErrorCode.OUTBOX_INVARIANT_VIOLATION,
       })
       const reconciliation = await service.reconcileAllocation({
@@ -372,11 +390,13 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           if (name === failpoint) throw new Error(`injected ${failpoint}`)
         },
       })
-      await expect(store.claimAndHoldQuota({
-        ...input,
-        request_hash: "f".repeat(64),
-        items: input.items,
-      })).rejects.toThrow(`injected ${failpoint}`)
+      await expect(
+        store.claimAndHoldQuota({
+          ...input,
+          request_hash: "f".repeat(64),
+          items: input.items,
+        })
+      ).rejects.toThrow(`injected ${failpoint}`)
       const rows = (await execute(
         `select
           (select count(*)::int from flash_sale_purchase_attempt where campaign_id = ?) attempts,
@@ -527,9 +547,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       }
       const published = await service.markAllocationOutboxPublished(command)
       expect(published.disposition).toBe("published")
-      await expect(service.markAllocationOutboxPublished(command)).resolves.toEqual(
-        published
-      )
+      await expect(
+        service.markAllocationOutboxPublished(command)
+      ).resolves.toEqual(published)
       await expect(
         service.redriveAllocationOutboxEvent({
           event_id: inserted.id,
@@ -542,12 +562,18 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
 
     it("blocks generated outbox CRUD mutations", async () => {
       await expect(
-        (service as unknown as { createAllocationOutboxEvents(): Promise<never> })
-          .createAllocationOutboxEvents()
+        (
+          service as unknown as {
+            createAllocationOutboxEvents(): Promise<never>
+          }
+        ).createAllocationOutboxEvents()
       ).rejects.toThrow("Direct allocation CRUD is disabled")
       await expect(
-        (service as unknown as { updateAllocationOutboxControls(): Promise<never> })
-          .updateAllocationOutboxControls()
+        (
+          service as unknown as {
+            updateAllocationOutboxControls(): Promise<never>
+          }
+        ).updateAllocationOutboxControls()
       ).rejects.toThrow("Direct allocation CRUD is disabled")
     })
 
@@ -568,7 +594,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         max_attempts: 3,
       })
       expect(claimed.events.map((event) => event.id)).toContain(healthy.id)
-      expect(claimed.events.map((event) => event.id)).not.toContain(blockedTail.id)
+      expect(claimed.events.map((event) => event.id)).not.toContain(
+        blockedTail.id
+      )
     })
 
     it("holds no PostgreSQL outbox row lock while the network publish is pending", async () => {

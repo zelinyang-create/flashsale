@@ -37,6 +37,17 @@ export type ActivateAllocationOutboxResult = Readonly<{
   required_after: Date
   replayed: boolean
 }>
+
+export type ActivateAllocationMovementLedgerCommand = Readonly<
+  Record<string, never>
+>
+export type ActivateAllocationMovementLedgerResult = Readonly<{
+  activation_id: string
+  required_after: Date
+  schema_version: 1
+  checkpoint_count: number
+  replayed: boolean
+}>
 export type ClaimAllocationOutboxEventsCommand = Readonly<{
   worker_id: string
   limit: number
@@ -421,6 +432,12 @@ export interface AllocationOutboxStore {
   ): Promise<AllocationOutboxMutationResult>
 }
 
+export interface AllocationMovementLedgerStore {
+  activateMovementLedger(
+    input: ActivateAllocationMovementLedgerCommand
+  ): Promise<ActivateAllocationMovementLedgerResult>
+}
+
 export enum AllocationCommandErrorCode {
   INVALID_COMMAND = "INVALID_COMMAND",
   INVALID_IDEMPOTENCY_KEY_HASH = "INVALID_IDEMPOTENCY_KEY_HASH",
@@ -444,6 +461,7 @@ export enum AllocationCommandErrorCode {
   OUTBOX_EVENT_NOT_FOUND = "OUTBOX_EVENT_NOT_FOUND",
   OUTBOX_STATE_CONFLICT = "OUTBOX_STATE_CONFLICT",
   OUTBOX_INVARIANT_VIOLATION = "OUTBOX_INVARIANT_VIOLATION",
+  MOVEMENT_LEDGER_INVARIANT_VIOLATION = "MOVEMENT_LEDGER_INVARIANT_VIOLATION",
 }
 
 export class AllocationCommandError extends Error {

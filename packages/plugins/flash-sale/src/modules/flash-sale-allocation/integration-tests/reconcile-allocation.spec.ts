@@ -18,6 +18,9 @@ import {
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityMovement,
+  CapacityMovementCheckpoint,
+  CapacityMovementControl,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../models"
@@ -41,6 +44,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     AllocationOutboxEvent,
     AllocationPolicy,
     Capacity,
+    CapacityMovement,
+    CapacityMovementCheckpoint,
+    CapacityMovementControl,
     PurchaseAttempt,
     AllocationHold,
     SubjectAllocation,
@@ -767,12 +773,14 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           `update flash_sale_allocation_outbox_event
               set event_name = 'flash_sale.quota.wrong.v1'
             where aggregate_id = ? and aggregate_version = ?`,
-          [mismatchedOutboxHeld.attempt.id, mismatchedOutboxHeld.attempt.version]
+          [
+            mismatchedOutboxHeld.attempt.id,
+            mismatchedOutboxHeld.attempt.version,
+          ]
         )
         await auditAndCover(mismatchedOutboxCampaign, [
           {
-            code:
-              AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_NAME_MISMATCH,
+            code: AllocationInvariantIssueCode.OUTBOX_CURRENT_EVENT_NAME_MISMATCH,
             entity_id: mismatchedOutboxHeld.attempt.id,
           },
         ])

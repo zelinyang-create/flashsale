@@ -39,6 +39,7 @@
     "dev": "medusa plugin:develop",
     "migration:generate": "medusa plugin:db:generate",
     "migration:prepare-expiry-downgrade": "node -r ts-node/register/transpile-only src/migration-support/prepare-expiry-downgrade.ts",
+    "migration:preflight-movement-downgrade": "node -r ts-node/register/transpile-only src/migration-support/preflight-movement-ledger-downgrade.ts",
     "prepare": "cross-env NODE_ENV=production yarn run build:plugin",
     "link:watch": "medusa plugin:publish && medusa plugin:develop",
     "test": "../../../node_modules/.bin/jest --bail --forceExit --testPathPattern=src --testPathIgnorePatterns=integration-tests",

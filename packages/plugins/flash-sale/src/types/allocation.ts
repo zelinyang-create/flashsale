@@ -34,6 +34,65 @@ export enum AllocationOutboxStatus {
   DEAD_LETTER = "dead_letter",
 }
 
+export enum CapacityMovementKind {
+  HOLD = "hold",
+  CONSUME = "consume",
+  RELEASE = "release",
+  EXPIRE = "expire",
+}
+
+export enum CapacityMovementBucket {
+  AVAILABLE = "available",
+  HELD = "held",
+  CONSUMED = "consumed",
+}
+
+export type CapacityMovementDTO = {
+  id: string
+  capacity_id: string
+  attempt_id: string
+  campaign_id: string
+  subject_id: string
+  campaign_item_id: string
+  transition_version: number
+  kind: CapacityMovementKind
+  from_bucket: CapacityMovementBucket
+  to_bucket: CapacityMovementBucket
+  quantity: number
+  fence_token: string
+  created_at: Date
+  updated_at: Date
+  deleted_at: Date | null
+}
+
+export type CapacityMovementCheckpointDTO = {
+  id: string
+  activation_id: string
+  capacity_id: string
+  campaign_item_id: string
+  shard_no: number
+  opening_granted_quantity: number
+  opening_available_quantity: number
+  opening_held_quantity: number
+  opening_consumed_quantity: number
+  capacity_version: number
+  activated_at: Date
+  created_at: Date
+  updated_at: Date
+  deleted_at: Date | null
+}
+
+export type CapacityMovementControlDTO = {
+  id: string
+  activation_id: string
+  required_after: Date
+  schema_version: number
+  checkpoint_digest: string
+  created_at: Date
+  updated_at: Date
+  deleted_at: Date | null
+}
+
 export type AllocationOutboxEventDTO = {
   id: string
   event_name: string

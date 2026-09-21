@@ -407,13 +407,32 @@ Phase 1E-2B1 已实现完整外层 Orchestrator：在持有同一 Cart Lock 后�
 这是小型配额转移账本，不是通用 Event Sourcing 或会计引擎。
 
 ```text
-id, campaign_item_id, capacity_shard_id
-attempt_id, transition_version
-from_bucket, to_bucket, quantity
-fence_token, created_at
+CapacityMovement:
+id, capacity_id, attempt_id
+campaign_id, subject_id, campaign_item_id
+transition_version, kind, from_bucket, to_bucket
+quantity, raw_quantity, fence_token
+created_at, updated_at, deleted_at
+
+CapacityMovementCheckpoint:
+id, activation_id, capacity_id, campaign_item_id, shard_no
+opening_granted_quantity, opening_available_quantity
+opening_held_quantity, opening_consumed_quantity
+raw_opening_granted_quantity, raw_opening_available_quantity
+raw_opening_held_quantity, raw_opening_consumed_quantity
+capacity_version, activated_at
+
+CapacityMovementControl:
+id, activation_id, required_after, schema_version, checkpoint_digest
 ```
 
 唯一约束：`(attempt_id, campaign_item_id, transition_version)`。
+
+`transition_version` **等于该次转移完成后的 `PurchaseAttempt.version`**，不是独立的
+Ledger 序号：Hold 通常为 v2；从 `QUOTA_HELD` 直接 Release/Cancel/Expire 通常为 v3；
+先进入 `QUOTA_COMMITTING` 再 Consume/Release 通常为 v4。不产生 Movement 的 Attempt 转移（例如
+Begin Settlement）仍会增加 Attempt Version，所以 Ledger 中的 `transition_version` 允许出现缺口，
+不能按连续数量自增。
 
 ```text
 hold:    AVAILABLE -q, HELD +q
@@ -423,6 +442,27 @@ expire:  HELD -q, AVAILABLE +q
 ```
 
 同一事务更新 Materialized Balance、写 Movement、更新 Attempt/Hold、写 Outbox。若 Balance 与 Ledger 不一致，暂停该 Item，从 Ledger 重建派生 Counter，并记录 Repair Audit。
+
+Phase 2A-1 已交付 append-only Movement/Checkpoint/Control schema、受限 route validator、lossless
+quantity fingerprint，以及 `activateAllocationMovementLedger({})` 基线内核。`fence_token` 是对不可变
+Movement identity tuple 的小写 SHA-256，用于精确重放校验；它**不是** Worker Fencing 的
+epoch 或 lease token，也不能阻止旧 Worker 提交。
+
+激活事务获取全局 advisory lock，按 ID 锁全部 live Capacity，预检 raw BigNumber/余额/Hold
+聚合，为每个 Capacity 保存 opening checkpoint，计算覆盖完整 checkpoint 不可变元组的
+`checkpoint_digest`，最后以单例 Control 提交切换水位；既有 Phase 1 余额不会被伪造成
+Movement。首次激活要求 Movement/Checkpoint/Control 三表物理全空（包括软删除行）。精确重放
+要求物理上恰好一条未删除的固定 ID Control，所有 Checkpoint 均未删除、属于同一
+Activation、`activated_at = required_after`，且重算 digest 一致；任一 orphan、软删除行或内容漂移
+都 fail closed。
+
+Phase 2A-1 **尚未接入在线业务 writer**，不得在生产启用。Phase 2A-2 必须先让 Hold、Consume、
+Release、Expire 与激活共享锁协议，并在同一事务写 Balance、Attempt/Hold、Movement 和 Outbox，之后
+才能执行激活。详见 ADR-0011 与 `runbooks/capacity-movement-ledger-activation.md`。
+
+带 Phase 1 旧数据的环境可以执行向上迁移：迁移只新增三张空表，不改写旧行；基线由后续受控激活
+建立。反向降级只允许在三张表的物理行数都为 0（因此从未激活、从未写 Movement）时执行；
+已激活或存在任何历史/软删除行时必须 fail closed，不得通过删数据来强制降级。
 
 ### 9.5 ReservationBinding、PaymentCommand 和可靠事件
 
@@ -442,7 +482,9 @@ status, attempt_count, next_check_at, last_error
 
 Outbox 保存稳定 Event ID 与 Aggregate Version；内部 Inbox 使用 `(consumer_name, event_id)` 唯一约束；Webhook Inbox 使用 `(provider, provider_account_id, provider_event_id)` 唯一约束。
 
-所有 Migration 通过 Module Migration Script 生成，不手写生成文件。
+所有 Migration 通过 Module Migration Script 生成并做 no-drift 校验。唯一例外是 Movement Ledger
+两个 `down` 的数据保护：在同一事务内以 `ACCESS EXCLUSIVE` 锁住三表并确认物理全空后，才允许
+删除摘要列或表；这是防止 append-only 审计数据被回滚静默删除的显式安全硬化。
 
 ## 10. Virtual Waiting Room
 
@@ -1350,6 +1392,9 @@ Allocation/Checkout 各自的原子 Outbox Producer/数据库投递状态机、�
 
 Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Production Consumer/Webhook
 Inbox、Campaign Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
+
+当前进度：Phase 2A-1 已完成 Movement Ledger schema、baseline/cutover activation 内核；在线
+Movement writer、Reconcile/Rebuild/Repair 属于后续 2A-2/2A-3。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

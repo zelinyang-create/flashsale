@@ -2,6 +2,7 @@ import { model } from "@medusajs/framework/utils"
 import { PurchaseAttemptState } from "../../../types"
 import AllocationHold from "./allocation-hold"
 import AllocationPolicy from "./allocation-policy"
+import CapacityMovement from "./capacity-movement"
 
 const PurchaseAttempt = model
   .define(
@@ -30,6 +31,9 @@ const PurchaseAttempt = model
       settlement_id: model.text().nullable(),
       settlement_started_at: model.dateTime().nullable(),
       holds: model.hasMany(() => AllocationHold, {
+        mappedBy: "attempt",
+      }),
+      capacity_movements: model.hasMany(() => CapacityMovement, {
         mappedBy: "attempt",
       }),
     }
