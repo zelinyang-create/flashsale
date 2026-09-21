@@ -4,6 +4,7 @@ import {
 import type { ClaimedAllocationOutboxEvent } from "../../../modules/flash-sale-allocation/application"
 import {
   ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+  ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
   ALLOCATION_OUTBOX_SCHEMA_VERSION,
   AllocationOutboxEventName,
   hashAllocationEventIdentity,
@@ -51,6 +52,43 @@ function event(id: string): ClaimedAllocationOutboxEvent {
   }
 }
 
+function repairEvent(id: string): ClaimedAllocationOutboxEvent {
+  const identity = {
+    event_name: AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED,
+    schema_version: ALLOCATION_OUTBOX_SCHEMA_VERSION,
+    aggregate_type: ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
+    aggregate_id: `apply-run-${id}`,
+    aggregate_version: 1,
+    payload: {
+      apply_run_id: `apply-run-${id}`,
+      plan_run_id: `plan-run-${id}`,
+      campaign_id: "campaign-1",
+      result_digest: "a".repeat(64),
+      action_ids: [`action-${id}-1`, `action-${id}-2`],
+      ticket: "INC-1001",
+    },
+  } as const
+  return {
+    id,
+    ...identity,
+    event_hash: hashAllocationEventIdentity(identity),
+    status: AllocationOutboxStatus.PUBLISHING,
+    available_at: new Date(0),
+    occurred_at: new Date("2026-09-20T20:00:00.000Z"),
+    published_at: null,
+    attempt_count: 1,
+    max_attempts: 3,
+    lease_owner: "worker-1",
+    lease_until: new Date(Date.now() + 30_000),
+    lease_epoch: 1,
+    published_by: null,
+    published_lease_epoch: null,
+    last_error_code: null,
+    dead_lettered_at: null,
+    redrive_count: 0,
+  }
+}
+
 const config: AllocationOutboxDispatcherConfig = {
   enabled: true,
   concurrency: 2,
@@ -61,6 +99,9 @@ const config: AllocationOutboxDispatcherConfig = {
   safety_margin_ms: 100,
   subscriber_manifest: {
     [AllocationOutboxEventName.QUOTA_HELD]: ["allocation-consumer-v1"],
+    [AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED]: [
+      "capacity-repair-consumer-v1",
+    ],
   },
 }
 
@@ -87,6 +128,38 @@ function fixtures(events = [event("event-1")]) {
 }
 
 describe("allocation outbox dispatcher", () => {
+  it("routes repair receipts without changing legacy quota dispatch", async () => {
+    const quota = event("quota-event")
+    const repair = repairEvent("repair-event")
+    const { allocation, transport } = fixtures([quota, repair])
+
+    await expect(
+      new AllocationOutboxDispatcher(
+        allocation,
+        transport,
+        config,
+        "worker-1"
+      ).runTick()
+    ).resolves.toMatchObject({ claimed: 2, accepted: 2, published: 2 })
+
+    expect(transport.publish).toHaveBeenCalledTimes(2)
+    expect(transport.publish).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event_name: AllocationOutboxEventName.QUOTA_HELD,
+        aggregate_type: ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+      })
+    )
+    expect(transport.publish).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event_name: AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED,
+        aggregate_type: ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
+      })
+    )
+    expect(allocation.failAllocationOutboxEvent).not.toHaveBeenCalled()
+  })
+
   it("claims at most concurrency, publishes outside claim, then marks exact epoch", async () => {
     const { allocation, transport } = fixtures()
     const result = await new AllocationOutboxDispatcher(

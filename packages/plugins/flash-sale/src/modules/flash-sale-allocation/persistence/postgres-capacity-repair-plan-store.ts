@@ -67,7 +67,7 @@ type RepairRunRow = Readonly<{
   deleted_at: Date | string | null
 }>
 
-type RepairActionRow = Readonly<{
+export type RepairActionRow = Readonly<{
   id: string
   run_id: string
   capacity_id: string
@@ -94,6 +94,12 @@ type RepairActionRow = Readonly<{
 }>
 
 type LegacyRepairActionRow = Omit<RepairActionRow, "before_capacity_version">
+
+export type VerifiedCapacityRepairPlan = Readonly<{
+  campaign_id: string
+  run: DryRunCapacityRepairResult
+  actions: readonly RepairActionRow[]
+}>
 
 const REPAIR_IDENTITY_UNIQUE =
   "IDX_flash_sale_capacity_repair_identity_digest_unique"
@@ -219,6 +225,97 @@ export class PostgresCapacityRepairPlanStore
         return await run(async (manager) => await this.executeOnce(input, manager))
       }
     })
+  }
+
+  async verifyPlanForApply(
+    manager: SqlEntityManager,
+    input: Readonly<{
+      plan_run_id: string
+      expected_evidence_digest: string
+      ordered_action_ids: readonly string[]
+      statement_timeout_ms: number
+    }>,
+    snapshotAt: Date,
+    evidence: MovementLedgerReconciliationEvidence
+  ): Promise<VerifiedCapacityRepairPlan> {
+    const runs = (await manager.execute(
+      `select request_identity_digest, command_digest, campaign_id, actor,
+              reason, ticket, plan_schema_version::text as plan_schema_version,
+              status, classification, evidence_digest, deleted_at
+         from flash_sale_capacity_repair_run
+        where id = ?`,
+      [input.plan_run_id]
+    )) as Array<{
+      request_identity_digest: string
+      command_digest: string
+      campaign_id: string | null
+      actor: string
+      reason: string
+      ticket: string
+      plan_schema_version: string
+      status: string
+      classification: string | null
+      evidence_digest: string
+      deleted_at: Date | string | null
+    }>
+    const plan = runs[0]
+    if (
+      runs.length !== 1 ||
+      !plan ||
+      plan.deleted_at !== null ||
+      plan.plan_schema_version !== "2" ||
+      plan.status !== "planned" ||
+      plan.classification !== "safe_repair" ||
+      !plan.campaign_id ||
+      plan.evidence_digest !== input.expected_evidence_digest
+    ) {
+      invariant("repair Plan is not an exact Apply-eligible schema-v2 plan")
+    }
+    const replay = await this.persistOrReplay(
+      manager,
+      {
+        request_identity_digest: plan.request_identity_digest,
+        command_digest: plan.command_digest,
+        campaign_id: plan.campaign_id,
+        actor: plan.actor,
+        reason: plan.reason,
+        ticket: plan.ticket,
+        statement_timeout_ms: input.statement_timeout_ms,
+        batch_size: 500,
+      },
+      snapshotAt,
+      evidence
+    )
+    const orderedPlanActions = [...replay.actions]
+      .map((action) => action.id)
+      .sort(compareRepairPlanKeys)
+    if (
+      replay.disposition !== "replay" ||
+      replay.run_id !== input.plan_run_id ||
+      replay.plan_schema_version !== 2 ||
+      replay.status !== "planned" ||
+      replay.classification !== "safe_repair" ||
+      replay.evidence_digest !== input.expected_evidence_digest ||
+      !same(orderedPlanActions, input.ordered_action_ids)
+    ) {
+      invariant("repair Plan action set or recomputed evidence drifted")
+    }
+    const actions = (await manager.execute(
+      `select id, run_id, capacity_id,
+              before_capacity_version::text as before_capacity_version,
+              before_granted_quantity, before_held_quantity,
+              before_consumed_quantity, before_raw_granted_quantity,
+              before_raw_held_quantity, before_raw_consumed_quantity,
+              expected_granted_quantity, expected_held_quantity,
+              expected_consumed_quantity, expected_raw_granted_quantity,
+              expected_raw_held_quantity, expected_raw_consumed_quantity,
+              issue_codes, classification, evidence_digest, status,
+              created_at, updated_at, deleted_at
+         from flash_sale_capacity_repair_action
+        where run_id = ? order by capacity_id, id`,
+      [input.plan_run_id]
+    )) as RepairActionRow[]
+    return { campaign_id: plan.campaign_id, run: replay, actions }
   }
 
   private async withSessionIdentityLock<T>(

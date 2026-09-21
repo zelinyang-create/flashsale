@@ -2,6 +2,8 @@ import { createHash } from "crypto"
 import { types as nodeTypes } from "util"
 
 export const ALLOCATION_OUTBOX_AGGREGATE_TYPE = "purchase_attempt" as const
+export const ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE =
+  "capacity_repair_apply" as const
 export const ALLOCATION_OUTBOX_SCHEMA_VERSION = 1 as const
 export const ALLOCATION_OUTBOX_MAX_PAYLOAD_BYTES = 65_536
 
@@ -12,6 +14,7 @@ export const AllocationOutboxEventName = {
   QUOTA_CONSUMED: "flash_sale.quota.consumed.v1",
   QUOTA_RELEASED: "flash_sale.quota.released.v1",
   QUOTA_EXPIRED: "flash_sale.quota.expired.v1",
+  CAPACITY_REPAIR_APPLIED: "flash_sale.capacity_repair.applied.v1",
 } as const
 
 export const ALLOCATION_OUTBOX_EVENT_NAMES = Object.freeze(
@@ -24,7 +27,9 @@ export type AllocationOutboxEventNameValue =
 export type AllocationEventIdentity = Readonly<{
   event_name: AllocationOutboxEventNameValue
   schema_version: typeof ALLOCATION_OUTBOX_SCHEMA_VERSION
-  aggregate_type: typeof ALLOCATION_OUTBOX_AGGREGATE_TYPE
+  aggregate_type:
+    | typeof ALLOCATION_OUTBOX_AGGREGATE_TYPE
+    | typeof ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE
   aggregate_id: string
   aggregate_version: number
   payload: Readonly<Record<string, unknown>>
@@ -96,6 +101,54 @@ const EVENT_STATE = Object.freeze({
   [AllocationOutboxEventName.QUOTA_RELEASED]: "quota_released",
   [AllocationOutboxEventName.QUOTA_EXPIRED]: "quota_expired",
 } as const)
+
+function validateRepairAppliedPayload(payload: Record<string, unknown>): void {
+  assertExactKeys(
+    payload,
+    [
+      "apply_run_id",
+      "plan_run_id",
+      "campaign_id",
+      "result_digest",
+      "action_ids",
+      "ticket",
+    ],
+    "Capacity repair event payload"
+  )
+  assertSafeJson(payload, "payload")
+  if (
+    typeof payload.apply_run_id !== "string" ||
+    !IDENTIFIER.test(payload.apply_run_id) ||
+    typeof payload.plan_run_id !== "string" ||
+    !IDENTIFIER.test(payload.plan_run_id) ||
+    typeof payload.campaign_id !== "string" ||
+    !IDENTIFIER.test(payload.campaign_id) ||
+    typeof payload.result_digest !== "string" ||
+    !SHA256.test(payload.result_digest) ||
+    typeof payload.ticket !== "string" ||
+    !IDENTIFIER.test(payload.ticket) ||
+    !Array.isArray(payload.action_ids) ||
+    payload.action_ids.length < 1 ||
+    payload.action_ids.length > 100
+  ) {
+    throw new AllocationEventEnvelopeError(
+      "Capacity repair event payload is invalid"
+    )
+  }
+  let previous: string | null = null
+  for (const actionId of payload.action_ids) {
+    if (
+      typeof actionId !== "string" ||
+      !IDENTIFIER.test(actionId) ||
+      (previous !== null && compareUtf16CodeUnits(previous, actionId) >= 0)
+    ) {
+      throw new AllocationEventEnvelopeError(
+        "Capacity repair action ids must be unique and canonically sorted"
+      )
+    }
+    previous = actionId
+  }
+}
 
 function plainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
@@ -211,7 +264,9 @@ function snapshotJson(
       for (let index = 0; index < arrayLength; index += 1) {
         const descriptor = descriptors[String(index)]
         assertDataDescriptor(descriptor, `${path}[${index}]`, true)
-        snapshot.push(snapshotJson(descriptor.value, `${path}[${index}]`, active))
+        snapshot.push(
+          snapshotJson(descriptor.value, `${path}[${index}]`, active)
+        )
       }
       return Object.freeze(snapshot)
     }
@@ -284,6 +339,10 @@ function validateAllocationEventPayload(
   eventName: AllocationOutboxEventNameValue,
   payload: Record<string, unknown>
 ): void {
+  if (eventName === AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED) {
+    validateRepairAppliedPayload(payload)
+    return
+  }
   const state = EVENT_STATE[eventName]
   const fields = [
     "attempt_id",
@@ -310,14 +369,20 @@ function validateAllocationEventPayload(
     !Array.isArray(payload.items) ||
     payload.items.length === 0
   ) {
-    throw new AllocationEventEnvelopeError("Allocation event payload is invalid")
+    throw new AllocationEventEnvelopeError(
+      "Allocation event payload is invalid"
+    )
   }
   let previousItemId: string | null = null
   for (const item of payload.items) {
     if (!plainRecord(item)) {
       throw new AllocationEventEnvelopeError("Allocation event item is invalid")
     }
-    assertExactKeys(item, ["campaign_item_id", "quantity"], "Allocation event item")
+    assertExactKeys(
+      item,
+      ["campaign_item_id", "quantity"],
+      "Allocation event item"
+    )
     if (
       typeof item.campaign_item_id !== "string" ||
       !IDENTIFIER.test(item.campaign_item_id) ||
@@ -380,7 +445,9 @@ export function normalizeAllocationEventWireEnvelope(
     typeof snapshot.aggregate_id !== "string" ||
     !IDENTIFIER.test(snapshot.aggregate_id)
   ) {
-    throw new AllocationEventEnvelopeError("Allocation event identity is invalid")
+    throw new AllocationEventEnvelopeError(
+      "Allocation event identity is invalid"
+    )
   }
   if (
     typeof snapshot.event_name !== "string" ||
@@ -388,9 +455,14 @@ export function normalizeAllocationEventWireEnvelope(
       snapshot.event_name as AllocationOutboxEventNameValue
     ) ||
     snapshot.schema_version !== ALLOCATION_OUTBOX_SCHEMA_VERSION ||
-    snapshot.aggregate_type !== ALLOCATION_OUTBOX_AGGREGATE_TYPE ||
+    snapshot.aggregate_type !==
+      (snapshot.event_name === AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED
+        ? ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE
+        : ALLOCATION_OUTBOX_AGGREGATE_TYPE) ||
     !Number.isSafeInteger(snapshot.aggregate_version) ||
-    (snapshot.aggregate_version as number) < 2 ||
+    (snapshot.event_name === AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED
+      ? snapshot.aggregate_version !== 1
+      : (snapshot.aggregate_version as number) < 2) ||
     typeof snapshot.event_hash !== "string" ||
     !SHA256.test(snapshot.event_hash) ||
     typeof snapshot.occurred_at !== "string" ||
@@ -398,13 +470,17 @@ export function normalizeAllocationEventWireEnvelope(
     new Date(snapshot.occurred_at).toISOString() !== snapshot.occurred_at ||
     !plainRecord(snapshot.payload)
   ) {
-    throw new AllocationEventEnvelopeError("Allocation event envelope is invalid")
+    throw new AllocationEventEnvelopeError(
+      "Allocation event envelope is invalid"
+    )
   }
   if (
     Buffer.byteLength(canonicalJson(snapshot.payload), "utf8") >
     ALLOCATION_OUTBOX_MAX_PAYLOAD_BYTES
   ) {
-    throw new AllocationEventEnvelopeError("Allocation event payload is too large")
+    throw new AllocationEventEnvelopeError(
+      "Allocation event payload is too large"
+    )
   }
   validateAllocationEventPayload(
     snapshot.event_name as AllocationOutboxEventNameValue,
@@ -413,7 +489,8 @@ export function normalizeAllocationEventWireEnvelope(
   const identity: AllocationEventIdentity = {
     event_name: snapshot.event_name as AllocationOutboxEventNameValue,
     schema_version: ALLOCATION_OUTBOX_SCHEMA_VERSION,
-    aggregate_type: ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+    aggregate_type:
+      snapshot.aggregate_type as AllocationEventIdentity["aggregate_type"],
     aggregate_id: snapshot.aggregate_id,
     aggregate_version: snapshot.aggregate_version as number,
     payload: snapshot.payload,

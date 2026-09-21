@@ -1,5 +1,6 @@
 import {
   ALLOCATION_OUTBOX_AGGREGATE_TYPE,
+  ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
   ALLOCATION_OUTBOX_SCHEMA_VERSION,
   AllocationEventIdentity,
   AllocationEventWireEnvelope,
@@ -38,6 +39,74 @@ function envelope(
 describe("Allocation event wire envelope", () => {
   it("accepts the exact immutable schema and recomputed hash", () => {
     expect(() => validateAllocationEventWireEnvelope(envelope())).not.toThrow()
+  })
+
+  it("accepts the strict capacity-repair Apply envelope", () => {
+    const identity: AllocationEventIdentity = {
+      event_name: AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED,
+      schema_version: 1,
+      aggregate_type: ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
+      aggregate_id: "fsraprun-envelope",
+      aggregate_version: 1,
+      payload: {
+        apply_run_id: "fsraprun-envelope",
+        plan_run_id: "fsreprun-envelope",
+        campaign_id: "campaign-envelope",
+        result_digest: "a".repeat(64),
+        action_ids: ["fsrapact-a", "fsrapact-b"],
+        ticket: "INC-3D2",
+      },
+    }
+    expect(
+      normalizeAllocationEventWireEnvelope({
+        event_id: "fsaevt-repair-envelope",
+        ...identity,
+        event_hash: hashAllocationEventIdentity(identity),
+        occurred_at: "2026-09-21T20:00:00.000Z",
+      })
+    ).toMatchObject(identity)
+  })
+
+  it("requires repair aggregate version 1 while quota remains monotonic", () => {
+    const repairIdentity: AllocationEventIdentity = {
+      event_name: AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED,
+      schema_version: 1,
+      aggregate_type: ALLOCATION_REPAIR_OUTBOX_AGGREGATE_TYPE,
+      aggregate_id: "fsraprun-version-two",
+      aggregate_version: 2,
+      payload: {
+        apply_run_id: "fsraprun-version-two",
+        plan_run_id: "fsreprun-version-two",
+        campaign_id: "campaign-envelope",
+        result_digest: "b".repeat(64),
+        action_ids: ["fsrapact-version-two"],
+        ticket: "INC-3D2",
+      },
+    }
+    expect(() =>
+      normalizeAllocationEventWireEnvelope({
+        event_id: "fsaevt-version-two",
+        ...repairIdentity,
+        event_hash: hashAllocationEventIdentity(repairIdentity),
+        occurred_at: "2026-09-21T20:00:00.000Z",
+      })
+    ).toThrow("envelope")
+
+    const quotaV3 = envelope({ aggregate_version: 3 })
+    const quotaIdentity: AllocationEventIdentity = {
+      event_name: quotaV3.event_name,
+      schema_version: quotaV3.schema_version,
+      aggregate_type: quotaV3.aggregate_type,
+      aggregate_id: quotaV3.aggregate_id,
+      aggregate_version: quotaV3.aggregate_version,
+      payload: quotaV3.payload,
+    }
+    expect(() =>
+      normalizeAllocationEventWireEnvelope({
+        ...quotaV3,
+        event_hash: hashAllocationEventIdentity(quotaIdentity),
+      })
+    ).not.toThrow()
   })
 
   it("rejects state/event drift, sensitive keys, and non-canonical items", () => {

@@ -1,18 +1,31 @@
-# Capacity Repair Apply Runbook（Phase 2A-3d-1）
+# Capacity Repair Apply Runbook（Phase 2A-3d-2）
 
 ## 当前能力
 
-当前只完成 Apply 契约与 append-only 审计 Schema，**尚不能执行修复**。生产 scheduled reconciliation 仍为
-只读；不存在 Apply API、Store、Capacity CAS 或 Repair Outbox。任何人不得直接向 Apply 审计表或 Capacity
-表写 SQL 来替代 3d-2。
+当前已实现受控的 Apply Handler/Store、Capacity Version CAS、append-only receipt 与 Repair Outbox 原子提交；
+生产 scheduled reconciliation 仍为只读，且尚未开放通用 Service/API。未经可信 Approval Verifier 接入和下述
+发布门禁，不得启用 Apply，也不得直接向 Apply 审计表或 Capacity 表写 SQL。
 
 新 dry-run Plan 为 schema v2，并记录同快照 Capacity Version；升级前 Plan 保持 v1，Action Version 为 NULL。
 v1 仅支持读取和 exact replay，禁止审批和 Apply。
 
 滚动升级期间数据库保留 `plan_schema_version DEFAULT 1`：旧 3c producer 不提供新列时只能生成 v1/NULL，
-新 producer 显式生成 v2/version。确认所有 producer 已升级前不得启用 3d-2；未来是否移除默认值必须通过独立
+新 producer 显式生成 v2/version。确认所有 producer 已升级前不得启用 Apply；未来是否移除默认值必须通过独立
 contract migration。迁移重跑会在表级锁内恢复全部命名 CHECK，但不会修改不符合约束的审计行；此类行会让
 迁移失败并触发审计调查。
+
+## Outbox 上线门禁
+
+Apply 会提交 `flash_sale.capacity_repair.applied.v1`。生产启用 Apply 之前必须先完成以下步骤：
+
+1. 部署能识别该严格 envelope 的 Dispatcher；
+2. 部署 Repair Subscriber，并把其稳定 subscriber ID 加入
+   `FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON`；
+3. 验证 manifest 同时完整覆盖全部既有 quota 事件与 Repair 事件，再启动 Dispatcher；
+4. 完成端到端验收后，最后启用 Apply 入口。
+
+配置解析会在 Repair Subscriber 缺失时拒绝启动 Dispatcher。不得绕过完整性检查；否则未知 Repair 事件会在
+旧 worker 中成为 poison event。若 Subscriber 未就绪，保持 Apply 关闭且不产生 Repair Outbox。
 
 ## 审批接入要求
 
@@ -23,7 +36,7 @@ contract migration。迁移重跑会在表级锁内恢复全部命名 CHECK，�
 - Approver 与 Requester 必须不同，审批尚未生效或已经过期立即拒绝；
 - 原始 request identity、credential、reference、JTI 不得写数据库或日志；只记录 domain-separated digest。
 
-## 未来执行前检查（3d-2，尚未实现）
+## 每次执行前检查
 
 1. Run 是 campaign-scoped、`planned/safe_repair/schema v2`；
 2. 选择集合等于该 Run 全部物理 proposed Actions，数量 1–100；
@@ -31,6 +44,10 @@ contract migration。迁移重跑会在表级锁内恢复全部命名 CHECK，�
 4. 按 ADR-0014 的锁序取得锁，在锁内重跑完整 root/facts/projector；
 5. 只允许 held/consumed 及 raw mirror，禁止 granted、Subject 或 Ledger 变更；
 6. Capacity CAS、Apply receipt 和 Outbox 必须同事务提交；任一步失败全部回滚。
+
+成功后的 exact replay 只核验不可变 Apply receipt/Actions/Outbox，不依赖 Capacity 仍停留在刚修复后的版本；
+这是为了允许后续合法业务生命周期继续推进。Outbox 的发布状态、租约、重试次数和发布时间属于可变投递字段，
+不参与 receipt replay；事件身份、payload、hash、发生/创建时间和软删除状态仍须精确匹配。
 
 ## Schema guard 告警
 

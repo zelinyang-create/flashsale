@@ -1451,10 +1451,11 @@ gate 后返回 `SCOPE_NOT_FOUND/manual_required`，不会返回空 healthy。
 每个 Policy 必须至少覆盖一个 Capacity，Policy/Capacity state 必须合法且一致；任一侧为 OPEN 时 repair
 scope 均按 OPEN 处理。孤立 Policy 既不能通过全局 Projector，也不能伪造 campaign scope。
 
-**Phase 2A-3b 只交付只读审计，不包含 Repair Plan 或 Rebuild；Phase 2A-3c 已交付下述只写审计表的
-dry-run Plan。** 当前没有 Repair Apply Writer、自动改数、Ledger 行补造/删除/恢复、scheduled repair 或
-生产修复门禁；这些执行能力属于后续 Phase 2A-3d。不得把 audit healthy 或 dry-run planned 表述为自动
-恢复已经交付，也不得覆盖 Phase 1 reconciliation 的独立语义。
+**Phase 2A-3b 只交付只读审计；Phase 2A-3c 已交付下述只写审计表的 dry-run Plan；Phase 2A-3d-2 已交付
+受控 Repair Apply Handler/Store。** Apply 仅能原子修复经过审批且锁内复核仍安全的 held/consumed counter
+及 raw mirror，不补造、删除或恢复 Ledger 行，也不等于 scheduled repair 或生产修复入口已经启用。不得把
+audit healthy、dry-run planned 或尚未完成 3d-3 门禁的 Apply 描述为自动恢复已经完整上线，也不得覆盖
+Phase 1 reconciliation 的独立语义。
 
 Phase 2A-3c 已交付持久化 Repair Plan dry-run：严格命令边界对原始 request/idempotency identity 做服务端
 SHA-256，只持久化 digest；在同一 `REPEATABLE READ` 证据快照中生成不可变 Run/Action，记录 Control root、
@@ -1474,9 +1475,16 @@ ApplyAction；generated CRUD 全部禁写。审批只能通过可信 `RepairAppr
 request identity/JTI 不进入 Prepared、数据库或日志；canonical claims 必须绑定 Plan v2、Campaign、Evidence
 和完整有序 Action Set。详见 ADR-0014 与 `runbooks/capacity-repair-apply.md`。
 
-**3d-1 没有 Apply 执行入口。** 锁内二次验证、CLOSED gate、version/before-value CAS、Capacity 原子更新、
-Repair Outbox、exact replay 与回滚属于 3d-2；真实并发/kill/crash 门禁属于 3d-3。scheduled reconcile 仍为
-真正 READ ONLY，不得把审计 Schema 描述成自动修复已经完成。
+Phase 2A-3d-2 已交付受控 Apply Handler/Store：固定连接上的 request mutex 与 RR 事务按在线 Writer/Provision
+兼容顺序加锁，锁内重算完整 Plan v2 evidence，并显式要求目标 Campaign 的 Policy/Capacity 全部 live CLOSED。
+仅 held/consumed 及 raw mirror 可按 version/before-value CAS 修复；Capacity、append-only Apply receipt 与严格
+`capacity_repair_apply` Outbox 同事务提交。成功后 exact replay 核验不可变 receipt/事件证据，但允许 Capacity
+继续合法演进及 Outbox 投递字段变化。序列化、死锁和精确 Plan/JTI 唯一竞争最多用全新 RR 快照重判一次，
+其他唯一错误不解释为 replay；审批在 commit 前使用数据库时钟再次验期。详见 ADR-0015。
+
+3d-2 仍未开放通用 Service/API，生产启用前必须接入可信 Verifier 并先部署 Repair Subscriber/完整 manifest。
+多进程 kill/crash、连接 quarantine 故障注入、真实 Subscriber 端到端和生产演练属于 3d-3；scheduled
+reconcile 仍为真正 READ ONLY，Apply 也不补造/删除 Ledger 或修改 Granted/Subject。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

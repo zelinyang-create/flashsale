@@ -71,6 +71,21 @@ const DRIFT_CODES = new Set<LedgerReconciliationIssueCode>([
   LedgerReconciliationIssueCode.RAW_MIRROR_DRIFT,
 ])
 
+function canonicalTimestamp(value: Date | string): string {
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new MedusaError(
+      MedusaError.Types.UNEXPECTED_STATE,
+      "Movement Ledger physical evidence contains an invalid timestamp"
+    )
+  }
+  return parsed.toISOString()
+}
+
+function canonicalDeletedAt(value: Date | string | null): string | null {
+  return value === null ? null : canonicalTimestamp(value)
+}
+
 async function readBatches<T extends { id: string }>(
   manager: SqlEntityManager,
   selectSql: string,
@@ -402,15 +417,41 @@ export class PostgresMovementLedgerReconciliationStore
           },
           repair_scope: repairScope(policies, capacities),
         }
+        // Raw driver timestamp representation differs between repository-owned
+        // and externally pinned Knex connections. Canonicalize every physical
+        // timestamp before hashing so both paths commit the same evidence.
         const physicalManifest: MovementLedgerPhysicalManifest = {
           schema: "movement-ledger-physical-manifest-v1",
-          controls,
-          checkpoints,
-          movements,
-          policies,
-          capacities,
-          attempts,
-          holds,
+          controls: controls.map((row) => ({
+            ...row,
+            required_after: canonicalTimestamp(row.required_after),
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          checkpoints: checkpoints.map((row) => ({
+            ...row,
+            activated_at: canonicalTimestamp(row.activated_at),
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          movements: movements.map((row) => ({
+            ...row,
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          policies: policies.map((row) => ({
+            ...row,
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          capacities: capacities.map((row) => ({
+            ...row,
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          attempts: attempts.map((row) => ({
+            ...row,
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
+          holds: holds.map((row) => ({
+            ...row,
+            deleted_at: canonicalDeletedAt(row.deleted_at),
+          })),
         }
         const complete = (
           domain: LedgerReconciliationResult

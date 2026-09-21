@@ -3,6 +3,7 @@ import { Modules } from "@medusajs/framework/utils"
 import {
   ALLOCATION_OUTBOX_EVENT_NAMES,
   CHECKOUT_OUTBOX_EVENT_NAMES,
+  AllocationOutboxEventName,
 } from "../../../shared"
 import {
   AllocationOutboxDispatcherConfigError,
@@ -68,8 +69,29 @@ describe("allocation outbox dispatcher config", () => {
       lease_seconds: 3,
       subscriber_manifest: expect.objectContaining({
         [ALLOCATION_OUTBOX_EVENT_NAMES[0]]: ["allocation-consumer-v1"],
+        [AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED]: [
+          "allocation-consumer-v1",
+        ],
       }),
     })
+  })
+
+  it("refuses dispatch until the repair subscriber is declared", () => {
+    const quotaOnly = ALLOCATION_OUTBOX_EVENT_NAMES.filter(
+      (name) => name !== AllocationOutboxEventName.CAPACITY_REPAIR_APPLIED
+    ).map((event_name) => ({
+      event_name,
+      subscriber_ids: ["allocation-consumer-v1"],
+    }))
+    expect(() =>
+      parseAllocationOutboxDispatcherConfig(
+        {
+          ...enabled,
+          FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON: manifest(quotaOnly),
+        },
+        config()
+      )
+    ).toThrow(AllocationOutboxDispatcherConfigError)
   })
 
   it("preserves allocation-only config and requires an exact union before enabling checkout", () => {

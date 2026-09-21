@@ -594,6 +594,34 @@ export type PreparedApplyCapacityRepairCommand = Readonly<{
   approval_purpose: "capacity_repair_apply"
 }>
 
+export type AppliedCapacityRepairAction = Readonly<{
+  id: string
+  plan_action_id: string
+  capacity_id: string
+  before_capacity_version: string
+  after_capacity_version: string
+  before_held_quantity: string
+  before_consumed_quantity: string
+  after_held_quantity: string
+  after_consumed_quantity: string
+  evidence_digest: string
+}>
+
+export type ApplyCapacityRepairResult = Readonly<{
+  disposition: "fresh" | "replay"
+  apply_run_id: string
+  plan_run_id: string
+  result_digest: string
+  outbox_event_id: string
+  actions: readonly AppliedCapacityRepairAction[]
+}>
+
+export interface CapacityRepairApplyStore {
+  applyCapacityRepair(
+    input: PreparedApplyCapacityRepairCommand
+  ): Promise<ApplyCapacityRepairResult>
+}
+
 export interface AllocationStore
   extends AllocationQuotaStore,
     AllocationControlStore {}
@@ -648,6 +676,8 @@ export enum AllocationCommandErrorCode {
   MOVEMENT_LEDGER_INVARIANT_VIOLATION = "MOVEMENT_LEDGER_INVARIANT_VIOLATION",
   REPAIR_PLAN_INVARIANT_VIOLATION = "REPAIR_PLAN_INVARIANT_VIOLATION",
   REPAIR_APPROVAL_INVALID = "REPAIR_APPROVAL_INVALID",
+  REPAIR_APPLY_CONFLICT = "REPAIR_APPLY_CONFLICT",
+  REPAIR_APPLY_INVARIANT_VIOLATION = "REPAIR_APPLY_INVARIANT_VIOLATION",
 }
 
 export class AllocationCommandError extends Error {

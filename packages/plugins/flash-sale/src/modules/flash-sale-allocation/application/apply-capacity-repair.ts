@@ -1,7 +1,9 @@
 import {
   AllocationCommandError,
   AllocationCommandErrorCode,
+  ApplyCapacityRepairResult,
   ApplyCapacityRepairCommand,
+  CapacityRepairApplyStore,
   DEFAULT_MOVEMENT_LEDGER_STATEMENT_TIMEOUT_MS,
   MAX_CAPACITY_REPAIR_APPLY_ACTIONS,
   MAX_MOVEMENT_LEDGER_STATEMENT_TIMEOUT_MS,
@@ -35,6 +37,25 @@ function invalid(message: string): never {
     AllocationCommandErrorCode.INVALID_COMMAND,
     message
   )
+}
+
+export class ApplyCapacityRepairHandler {
+  constructor(
+    private readonly store: CapacityRepairApplyStore,
+    private readonly approvalVerifier: RepairApprovalVerifier,
+    private readonly now: () => Date = () => new Date()
+  ) {}
+
+  async execute(
+    command: ApplyCapacityRepairCommand
+  ): Promise<ApplyCapacityRepairResult> {
+    const prepared = await prepareApplyCapacityRepairCommand(
+      command,
+      this.approvalVerifier,
+      this.now()
+    )
+    return await this.store.applyCapacityRepair(prepared)
+  }
 }
 
 function invalidApproval(message: string): never {
