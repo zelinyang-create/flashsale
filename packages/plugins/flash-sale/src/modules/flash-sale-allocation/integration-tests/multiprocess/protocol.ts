@@ -1,14 +1,25 @@
 import {
+  ActivateAllocationMovementLedgerCommand,
   ClaimAndHoldQuotaCommand,
   ClaimAllocationOutboxEventsCommand,
   ExpireDueQuotaCommand,
   ExpireQuotaCommand,
   FailAllocationOutboxEventCommand,
   MarkAllocationOutboxPublishedCommand,
+  ProvisionAllocationCommand,
   SettlementQuotaCommand,
 } from "../../application"
+import { AllocationFaultPoint } from "../../persistence"
 
 export type MultiprocessOperation =
+  | Readonly<{
+      kind: "activate_movement_ledger"
+      command: ActivateAllocationMovementLedgerCommand
+    }>
+  | Readonly<{
+      kind: "provision_allocation"
+      command: ProvisionAllocationCommand
+    }>
   | Readonly<{
       kind: "claim_and_hold"
       command: ClaimAndHoldQuotaCommand
@@ -71,6 +82,11 @@ export type MultiprocessSuccess = Readonly<{
     | "dead_lettered"
     | "redriven"
     | "fenced"
+  activation_id?: string
+  checkpoint_count?: number
+  schema_version?: number
+  policy_id?: string
+  capacity_ids?: readonly string[]
 }>
 
 export type MultiprocessFailure = Readonly<{
@@ -89,6 +105,12 @@ export type WorkerRequest =
     }>
   | Readonly<{
       id: number
+      kind: "execute_until_failpoint"
+      operation: MultiprocessOperation
+      failpoint: AllocationFaultPoint
+    }>
+  | Readonly<{
+      id: number
       kind: "shutdown"
     }>
 
@@ -98,6 +120,12 @@ export type WorkerResponse =
       kind: "result"
       id: number
       results: readonly MultiprocessResult[]
+    }>
+  | Readonly<{
+      kind: "failpoint_reached"
+      id: number
+      failpoint: AllocationFaultPoint
+      attempt_id: string
     }>
   | Readonly<{
       kind: "fatal"

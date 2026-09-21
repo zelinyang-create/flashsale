@@ -484,10 +484,16 @@ Root Schema Version 采用兼容升级：历史 v1 digest 不含 `checkpoint_kin
 `cutover`；当前新激活写 v2，digest 包含显式 kind。升级后可精确重放 v1；首次 Active Provision 先验证
 v1 Root，再在同一 Control CAS 中升级 `schema_version=2` 并写 v2 digest，不通过 SQL 猜测或重算旧摘要。
 
-当前证据属于 **Phase 2A-2a**：真实 PostgreSQL 已覆盖 v2/v3/v4、精确 replay、脏 Movement 冲突回滚、
-Movement 后故障点回滚、Legacy Cutover、并发 Provision Root 和 Activation/Writer 竞态。跨进程 kill/crash
-窗口与更完整的多实例故障矩阵属于 Phase 2A-2b；完成前仍不得执行生产激活。详见 ADR-0011、ADR-0012 与
-`runbooks/capacity-movement-ledger-activation.md`。
+当前证据已完成 **Phase 2A-2a/2b**：除 v2/v3/v4、精确 replay、Legacy Cutover 与单进程故障回滚外，
+独立 Node 子进程会在第一条 Movement 或 Outbox `INSERT` 返回后发送已 flush 的 failpoint 握手并永久挂起；
+父进程在请求仍 pending 时执行真实 `child.kill`，再用 exclusive Activation replay 而非 sleep 等待 PostgreSQL
+完成 rollback，并断言 kill 已发出且进程随后退出。竞态测试为 Worker 注入唯一 PostgreSQL
+`application_name`：持锁方在 shared/exclusive Movement advisory lock 或 Campaign lock 内握手暂停，父进程
+只有通过 `pg_stat_activity`/`pg_locks` 观测到竞争 backend 的真实 `Lock` wait 后才 kill holder。测试因此
+还要求未授予锁为 `advisory`，且 `pg_blocking_pids(contender_pid)` 包含该 holder Worker 的明确 PID，排除
+同一连接池其他 backend 的误识别。测试因此确定性覆盖 Activation/Writer、Active Provision duplicate replay、First Activation/First Provision 的合法
+线性化，而不是依赖 `Promise.all` 的调度巧合。生产激活仍等待 Phase 2A-3 Reconcile/Rebuild 和全实例协议确认。详见
+ADR-0011、ADR-0012、`runbooks/capacity-movement-ledger-activation.md` 与 crash matrix。
 
 带 Phase 1 旧数据的环境可以执行向上迁移：迁移新增 Movement/Checkpoint/Control 三张空表，并为
 Control 增加 digest、为 Checkpoint 增加 kind、为 PurchaseAttempt 增加两个 nullable activation binding；
@@ -1425,9 +1431,9 @@ Allocation/Checkout 各自的原子 Outbox Producer/数据库投递状态机、�
 Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Production Consumer/Webhook
 Inbox、Campaign Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
 
-当前进度：Phase 2A-2a 已完成 Movement Ledger schema、baseline/cutover、事务内在线 writer、
-滚动 Provision Checkpoint Root 与单进程真实 PostgreSQL 故障回滚证据。跨进程 kill/crash 矩阵属于
-2A-2b；Reconcile/Rebuild/Repair 属于 2A-3。
+当前进度：Phase 2A-2a/2b 已完成 Movement Ledger schema、baseline/cutover、事务内在线 writer、
+滚动 Provision Checkpoint Root、单进程故障回滚与多进程真实 kill/crash/race 矩阵；
+Reconcile/Rebuild/Repair 属于 2A-3。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

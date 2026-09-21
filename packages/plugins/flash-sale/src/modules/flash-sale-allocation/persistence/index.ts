@@ -1,4 +1,5 @@
 export * from "./postgres-allocation-attempt-store"
+export * from "./allocation-fault-injector"
 export * from "./allocation-outbox-producer"
 export * from "./capacity-movement-producer"
 export * from "./postgres-allocation-outbox-store"

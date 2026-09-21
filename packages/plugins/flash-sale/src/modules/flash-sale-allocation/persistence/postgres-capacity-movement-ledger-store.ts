@@ -19,6 +19,7 @@ import {
   assertMovementCheckpointRows,
   calculateMovementCheckpointDigest,
 } from "./capacity-movement-producer"
+import { AllocationFaultInjector } from "./allocation-fault-injector"
 
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -61,7 +62,10 @@ const canonicalInteger = (value: number | string): string => {
 export class PostgresCapacityMovementLedgerStore
   implements AllocationMovementLedgerStore
 {
-  constructor(private readonly baseRepository: DAL.RepositoryService) {}
+  constructor(
+    private readonly baseRepository: DAL.RepositoryService,
+    private readonly faultInjector?: AllocationFaultInjector
+  ) {}
 
   async activateMovementLedger(
     _input: ActivateAllocationMovementLedgerCommand
@@ -70,6 +74,10 @@ export class PostgresCapacityMovementLedgerStore
       await manager.execute(
         "select pg_advisory_xact_lock(hashtextextended(?::text, 0))",
         [ACTIVATION_LOCK]
+      )
+      await this.faultInjector?.hit(
+        "after_movement_ledger_exclusive_lock",
+        CONTROL_ID
       )
 
       // Physical rows are intentional here: soft deletion must not make

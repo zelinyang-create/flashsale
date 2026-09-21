@@ -18,6 +18,7 @@ import {
   CapacityMovementFingerprintInput,
   createCapacityMovementFingerprint,
 } from "../domain"
+import { AllocationFaultInjector } from "./allocation-fault-injector"
 
 export const ALLOCATION_MOVEMENT_LEDGER_CONTROL_ID =
   "allocation-movement-ledger"
@@ -770,7 +771,7 @@ export async function appendCapacityMovements(
   attempt: ClaimedPurchaseAttempt,
   holds: readonly ClaimedAllocationHold[],
   transition: MovementTransition,
-  afterFirstAppend?: () => void | Promise<void>
+  faultInjector?: AllocationFaultInjector
 ): Promise<void> {
   const control = await loadControl(manager)
   const activationBinding =
@@ -839,7 +840,10 @@ export async function appendCapacityMovements(
       )
     }
     if (index === 0 && sortedHolds.length > 1) {
-      await afterFirstAppend?.()
+      await faultInjector?.hit(
+        "after_first_capacity_movement_append",
+        attempt.id
+      )
     }
   }
 }

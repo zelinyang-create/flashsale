@@ -8,6 +8,7 @@ import {
 } from "@medusajs/framework/utils"
 import * as readline from "readline"
 import {
+  ActivateAllocationMovementLedgerHandler,
   ClaimAndHoldQuotaHandler,
   ClaimAllocationOutboxEventsHandler,
   ConsumeQuotaSettlementHandler,
@@ -15,6 +16,7 @@ import {
   ExpireQuotaHandler,
   FailAllocationOutboxEventHandler,
   MarkAllocationOutboxPublishedHandler,
+  ProvisionAllocationHandler,
   ReleaseQuotaSettlementHandler,
 } from "../../application"
 import {
@@ -31,8 +33,10 @@ import {
   SubjectAllocation,
 } from "../../models"
 import {
+  AllocationFaultInjector,
   PostgresAllocationAttemptStore,
   PostgresAllocationOutboxStore,
+  PostgresCapacityMovementLedgerStore,
 } from "../../persistence"
 import {
   MULTIPROCESS_PROTOCOL_PREFIX,
@@ -46,6 +50,15 @@ function send(response: WorkerResponse) {
   process.stdout.write(
     `${MULTIPROCESS_PROTOCOL_PREFIX}${JSON.stringify(response)}\n`
   )
+}
+
+async function sendAndFlush(response: WorkerResponse): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(
+      `${MULTIPROCESS_PROTOCOL_PREFIX}${JSON.stringify(response)}\n`,
+      (error) => (error ? reject(error) : resolve())
+    )
+  })
 }
 
 function errorDetails(error: unknown) {
@@ -87,15 +100,15 @@ async function main() {
       // Keep enough independent connections to create real overlap without
       // turning this correctness harness into a connection-storm benchmark.
       pool: { min: 1, max: 8 },
+      driverOptions: {
+        connection: {
+          application_name:
+            process.env.FLASH_SALE_MP_APPLICATION_NAME ?? "",
+        },
+      },
     })
   )
   const repository = new MikroOrmBaseRepository({ manager: orm.em })
-  const store = new PostgresAllocationAttemptStore(repository)
-  const claimAndHold = new ClaimAndHoldQuotaHandler(store)
-  const consumeSettlement = new ConsumeQuotaSettlementHandler(store)
-  const releaseSettlement = new ReleaseQuotaSettlementHandler(store)
-  const expire = new ExpireQuotaHandler(store)
-  const expireDue = new ExpireDueQuotaHandler(store)
   const outboxStore = new PostgresAllocationOutboxStore(repository)
   const claimOutbox = new ClaimAllocationOutboxEventsHandler(outboxStore)
   const markOutboxPublished = new MarkAllocationOutboxPublishedHandler(
@@ -104,11 +117,47 @@ async function main() {
   const failOutbox = new FailAllocationOutboxEventHandler(outboxStore)
 
   async function execute(
-    operation: MultiprocessOperation
+    operation: MultiprocessOperation,
+    faultInjector?: AllocationFaultInjector
   ): Promise<MultiprocessResult> {
     try {
+      const store = new PostgresAllocationAttemptStore(
+        repository,
+        faultInjector
+      )
+      if (operation.kind === "activate_movement_ledger") {
+        const value = await new ActivateAllocationMovementLedgerHandler(
+          new PostgresCapacityMovementLedgerStore(repository, faultInjector)
+        ).execute(operation.command)
+        return {
+          outcome: "fulfilled",
+          attempt_id: "",
+          attempt_state: "movement_ledger",
+          hold_states: [],
+          replayed: value.replayed,
+          activation_id: value.activation_id,
+          checkpoint_count: value.checkpoint_count,
+          schema_version: value.schema_version,
+        }
+      }
+      if (operation.kind === "provision_allocation") {
+        const value = await new ProvisionAllocationHandler(store).execute(
+          operation.command
+        )
+        return {
+          outcome: "fulfilled",
+          attempt_id: "",
+          attempt_state: "allocation_provision",
+          hold_states: [],
+          replayed: value.replayed,
+          policy_id: value.policy.id,
+          capacity_ids: value.capacities.map((capacity) => capacity.id),
+        }
+      }
       if (operation.kind === "claim_and_hold") {
-        const value = await claimAndHold.execute(operation.command)
+        const value = await new ClaimAndHoldQuotaHandler(store).execute(
+          operation.command
+        )
         return {
           outcome: "fulfilled",
           attempt_id: value.attempt.id,
@@ -124,7 +173,9 @@ async function main() {
         }
       }
       if (operation.kind === "expire_due") {
-        const value = await expireDue.execute(operation.command)
+        const value = await new ExpireDueQuotaHandler(store).execute(
+          operation.command
+        )
         return {
           outcome: "fulfilled",
           attempt_id: "",
@@ -170,10 +221,14 @@ async function main() {
       }
       const value =
         operation.kind === "consume_settlement"
-          ? await consumeSettlement.execute(operation.command)
+          ? await new ConsumeQuotaSettlementHandler(store).execute(
+              operation.command
+            )
           : operation.kind === "release_settlement"
-          ? await releaseSettlement.execute(operation.command)
-          : await expire.execute(operation.command)
+          ? await new ReleaseQuotaSettlementHandler(store).execute(
+              operation.command
+            )
+          : await new ExpireQuotaHandler(store).execute(operation.command)
       return {
         outcome: "fulfilled",
         attempt_id: value.attempt.id,
@@ -203,10 +258,35 @@ async function main() {
         input.close()
         return
       }
+      if (request.kind === "execute_until_failpoint") {
+        const faultInjector: AllocationFaultInjector = {
+          hit: async (name, attemptId) => {
+            if (name !== request.failpoint) return
+            // Await the stream callback before suspending forever. The parent
+            // only kills after readline observes this complete protocol line.
+            await sendAndFlush({
+              kind: "failpoint_reached",
+              id: request.id,
+              failpoint: name,
+              attempt_id: attemptId,
+            })
+            await new Promise<never>(() => undefined)
+          },
+        }
+        await execute(request.operation, faultInjector)
+        send({
+          kind: "fatal",
+          id: request.id,
+          message: `Operation completed without reaching ${request.failpoint}`,
+        })
+        return
+      }
       send({
         kind: "result",
         id: request.id,
-        results: await Promise.all(request.operations.map(execute)),
+        results: await Promise.all(
+          request.operations.map((operation) => execute(operation))
+        ),
       })
     })
   })

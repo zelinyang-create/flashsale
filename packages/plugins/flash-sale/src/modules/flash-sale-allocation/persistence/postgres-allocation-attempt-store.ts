@@ -46,6 +46,7 @@ import {
   verifyCapacityMovementHistory,
   verifyProvisionedCapacityCheckpoints,
 } from "./capacity-movement-producer"
+import { AllocationFaultInjector } from "./allocation-fault-injector"
 
 type PolicyRow = {
   id: string
@@ -567,6 +568,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       // This must be the first application lock in the transaction. Activation
       // takes the exclusive form before locking Capacity rows.
       await lockAllocationMovementWriter(manager)
+      await this.faultInjector?.hit(
+        "after_movement_writer_shared_lock",
+        "allocation-movement-writer"
+      )
       return await operation(manager)
     })
   }
@@ -583,6 +588,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     input: ProvisionAllocationPersistenceInput
   ): Promise<AllocationControlResult> {
     await this.lockCampaignControl(manager, input.campaign_id)
+    await this.faultInjector?.hit(
+      "after_provision_campaign_lock",
+      input.campaign_id
+    )
     await this.assertCampaignNotFenced(manager, input.campaign_id)
 
     const latestPolicies = (await manager.execute(
@@ -1438,11 +1447,12 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       throw this.invariant("Purchase attempt CAS failed while locked")
     }
     const updatedAttempt = mapAttempt(attemptUpdates[0])
-    await appendCapacityMovements(manager, updatedAttempt, holds, "hold", () =>
-      this.faultInjector?.hit(
-        "after_first_capacity_movement_append",
-        updatedAttempt.id
-      )
+    await appendCapacityMovements(
+      manager,
+      updatedAttempt,
+      holds,
+      "hold",
+      this.faultInjector
     )
     await this.appendTransitionOutbox(manager, updatedAttempt, holds)
     return {
@@ -1869,11 +1879,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       settledAttempt,
       resolvedHolds,
       disposition === "cancel" ? "release" : disposition,
-      () =>
-        this.faultInjector?.hit(
-          "after_first_capacity_movement_append",
-          settledAttempt.id
-        )
+      this.faultInjector
     )
     await this.appendTransitionOutbox(manager, settledAttempt, resolvedHolds)
     return {
@@ -2031,15 +2037,4 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       message
     )
   }
-}
-
-export interface AllocationFaultInjector {
-  hit(
-    name:
-      | "during_expiry_release"
-      | "after_first_capacity_movement_append"
-      | "after_domain_transition_before_outbox"
-      | "after_outbox_append_before_commit",
-    attemptId: string
-  ): void | Promise<void>
 }

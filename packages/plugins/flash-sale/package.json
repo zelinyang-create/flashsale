@@ -48,6 +48,7 @@
     "test:outbox:probe": "../../../node_modules/.bin/jest --runInBand --forceExit --runTestsByPath full-app-outbox-tests/allocation-event-probe.pg.spec.ts --modulePathIgnorePatterns=\\.medusa/",
     "test:outbox:full-app": "yarn build:plugin && ../../../node_modules/.bin/jest --runInBand --forceExit --runTestsByPath full-app-outbox-tests/allocation-outbox-redis.full-app.spec.ts --modulePathIgnorePatterns=\\.medusa/",
     "test:multiprocess": "cross-env FLASH_SALE_MULTIPROCESS_FULL=1 ../../../node_modules/.bin/jest --runInBand --forceExit --testPathPattern=multiprocess-allocation.spec.ts --modulePathIgnorePatterns=\\.medusa/",
+    "test:movement:crash": "../../../node_modules/.bin/jest --runInBand --forceExit --runTestsByPath src/modules/flash-sale-allocation/integration-tests/capacity-movement-crash.spec.ts --modulePathIgnorePatterns=\\.medusa/",
     "test:phase1:gate": "node scripts/run-phase1-gate.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "watch": "medusa plugin:develop"

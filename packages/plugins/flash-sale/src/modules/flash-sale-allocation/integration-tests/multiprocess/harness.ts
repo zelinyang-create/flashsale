@@ -2,6 +2,7 @@ import { ChildProcessWithoutNullStreams, spawn } from "child_process"
 import * as path from "path"
 import * as readline from "readline"
 import { MultiprocessOperation, MultiprocessResult } from "./protocol"
+import { AllocationFaultPoint } from "../../persistence"
 import {
   MULTIPROCESS_PROTOCOL_PREFIX,
   WorkerRequest,
@@ -12,11 +13,30 @@ type PendingRequest = {
   resolve: (results: readonly MultiprocessResult[]) => void
   reject: (error: Error) => void
   timeout: NodeJS.Timeout
+  expectedFailpoint?: AllocationFaultPoint
+  failpointReached?: boolean
+  reachResolve?: () => void
+  reachReject?: (error: Error) => void
 }
+
+export type PendingCrashExecution = Readonly<{
+  result: Promise<readonly MultiprocessResult[]>
+}>
+
+export type WorkerTerminationObservation = Readonly<{
+  kill_issued: true
+  exited_after_kill: true
+}>
+
+export type WorkerCrashOptions = Readonly<{
+  initialKill?: () => boolean
+}>
 
 const READY_TIMEOUT_MS = 30_000
 const REQUEST_TIMEOUT_MS = 120_000
 const EXIT_TIMEOUT_MS = 10_000
+const FAILED_CRASH_CLEANUP_TIMEOUT_MS = 1_000
+let fleetSequence = 0
 
 class AllocationWorker {
   private readonly child: ChildProcessWithoutNullStreams
@@ -31,8 +51,13 @@ class AllocationWorker {
   private stderr = ""
   private failed = false
   private intentionalExit = false
+  private closePromise?: Promise<void>
 
-  constructor(databaseUrl: string, schema: string) {
+  constructor(
+    databaseUrl: string,
+    schema: string,
+    readonly applicationName: string
+  ) {
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.readyResolve = resolve
       this.readyReject = reject
@@ -54,6 +79,7 @@ class AllocationWorker {
       env: {
         ...process.env,
         FLASH_SALE_MP_DATABASE_URL: databaseUrl,
+        FLASH_SALE_MP_APPLICATION_NAME: applicationName,
         FLASH_SALE_MP_SCHEMA: schema,
         TS_NODE_PROJECT: path.resolve(
           __dirname,
@@ -95,7 +121,38 @@ class AllocationWorker {
     })
   }
 
+  async executeUntilFailpoint(
+    operation: MultiprocessOperation,
+    failpoint: AllocationFaultPoint
+  ): Promise<PendingCrashExecution> {
+    let reachResolve!: () => void
+    let reachReject!: (error: Error) => void
+    const reached = new Promise<void>((resolve, reject) => {
+      reachResolve = resolve
+      reachReject = reject
+    })
+    const result = this.request(
+      {
+        id: ++this.sequence,
+        kind: "execute_until_failpoint",
+        operation,
+        failpoint,
+      },
+      { expectedFailpoint: failpoint, reachResolve, reachReject }
+    )
+    // The process exit rejects this promise. Attach a handler immediately so
+    // a real TerminateProcess cannot create a transient unhandled rejection.
+    void result.catch(() => undefined)
+    await reached
+    return { result }
+  }
+
   async close() {
+    this.closePromise ??= this.closeOnce()
+    await this.closePromise
+  }
+
+  private async closeOnce() {
     if (
       this.child.exitCode !== null ||
       this.child.signalCode !== null ||
@@ -120,17 +177,86 @@ class AllocationWorker {
     })
   }
 
-  async crash() {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) return
-    if (this.pending.size > 0) {
-      throw new Error("Cannot crash an allocation worker with pending requests")
+  async crash(
+    options: WorkerCrashOptions = {}
+  ): Promise<WorkerTerminationObservation> {
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      throw new Error("Cannot crash an allocation worker that already exited")
+    }
+    const pending = [...this.pending.values()]
+    if (
+      pending.length > 0 &&
+      (pending.length !== 1 ||
+        pending[0].expectedFailpoint === undefined ||
+        pending[0].failpointReached !== true)
+    ) {
+      throw new Error(
+        "Crash with pending work requires exactly one request suspended at its failpoint"
+      )
     }
     this.intentionalExit = true
-    this.child.kill()
-    await this.exitPromise
+    const killIssued = options.initialKill?.() ?? this.child.kill()
+    if (!killIssued) {
+      return await this.cleanupFailedCrash(
+        new Error("Allocation worker kill request was not issued")
+      )
+    }
+    try {
+      await this.waitForExit(
+        EXIT_TIMEOUT_MS,
+        `Allocation worker did not exit within ${EXIT_TIMEOUT_MS}ms after kill`
+      )
+    } catch (error) {
+      return await this.cleanupFailedCrash(
+        error instanceof Error ? error : new Error(String(error))
+      )
+    }
+    return { kill_issued: true, exited_after_kill: true }
   }
 
-  private request(request: WorkerRequest) {
+  private async waitForExit(timeoutMs: number, message: string) {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(message)), timeoutMs)
+      void this.exitPromise.then(() => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+  }
+
+  private async cleanupFailedCrash(error: Error): Promise<never> {
+    // Preserve the primary termination error while synchronously marking the
+    // worker failed and rejecting every request/reach promise and timer.
+    this.fail(error)
+    this.child.stdin.destroy()
+    this.child.stdout.destroy()
+    this.child.stderr.destroy()
+    if (this.child.exitCode === null && this.child.signalCode === null) {
+      try {
+        this.child.kill()
+      } catch {
+        // Best effort only: the original crash error remains authoritative.
+      }
+    }
+    try {
+      await this.waitForExit(
+        FAILED_CRASH_CLEANUP_TIMEOUT_MS,
+        "Allocation worker failed-crash cleanup timed out"
+      )
+    } catch {
+      // Do not replace the original error or retain an event-loop handle.
+      this.child.unref()
+    }
+    throw error
+  }
+
+  private request(
+    request: WorkerRequest,
+    failpoint?: Pick<
+      PendingRequest,
+      "expectedFailpoint" | "reachResolve" | "reachReject"
+    >
+  ) {
     return new Promise<readonly MultiprocessResult[]>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(request.id)
@@ -138,9 +264,10 @@ class AllocationWorker {
           `Allocation worker request ${request.id} (${request.kind}) timed out after ${REQUEST_TIMEOUT_MS}ms. ${this.stderr}`.trim()
         )
         reject(error)
+        failpoint?.reachReject?.(error)
         this.fail(error)
       }, REQUEST_TIMEOUT_MS)
-      this.pending.set(request.id, { resolve, reject, timeout })
+      this.pending.set(request.id, { resolve, reject, timeout, ...failpoint })
       this.child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
         if (error) {
           this.fail(error)
@@ -180,6 +307,26 @@ class AllocationWorker {
       this.fail(new Error(`Unexpected worker response ${response.id}`))
       return
     }
+    if (response.kind === "failpoint_reached") {
+      if (
+        pending.expectedFailpoint !== response.failpoint ||
+        pending.failpointReached
+      ) {
+        this.fail(
+          new Error(`Unexpected failpoint response for request ${response.id}`)
+        )
+        return
+      }
+      pending.failpointReached = true
+      pending.reachResolve?.()
+      return
+    }
+    if (pending.expectedFailpoint && !pending.failpointReached) {
+      this.fail(
+        new Error(`Request ${response.id} completed before its failpoint`)
+      )
+      return
+    }
     this.pending.delete(response.id)
     clearTimeout(pending.timeout)
     pending.resolve(response.results)
@@ -195,9 +342,10 @@ class AllocationWorker {
     for (const request of this.pending.values()) {
       clearTimeout(request.timeout)
       request.reject(error)
+      request.reachReject?.(error)
     }
     this.pending.clear()
-    if (this.child.exitCode === null) {
+    if (this.child.exitCode === null && this.child.signalCode === null) {
       this.child.kill()
     }
   }
@@ -210,9 +358,15 @@ export class AllocationWorkerFleet {
     if (!Number.isInteger(size) || size < 2 || size > 4) {
       throw new Error("Multiprocess allocation tests require 2 to 4 workers")
     }
+    const fleetId = `${process.pid}-${Date.now()}-${++fleetSequence}`
     const workers = Array.from(
       { length: size },
-      () => new AllocationWorker(databaseUrl, schema)
+      (_, index) =>
+        new AllocationWorker(
+          databaseUrl,
+          schema,
+          `flash-sale-mp-${fleetId}-${index}`
+        )
     )
     try {
       await Promise.all(workers.map((worker) => worker.ready()))
@@ -247,10 +401,26 @@ export class AllocationWorkerFleet {
     return await worker.execute(operations)
   }
 
-  async crash(workerIndex: number) {
+  async crash(workerIndex: number, options: WorkerCrashOptions = {}) {
     const worker = this.workers[workerIndex]
     if (!worker) throw new Error(`Allocation worker ${workerIndex} does not exist`)
-    await worker.crash()
+    return await worker.crash(options)
+  }
+
+  applicationName(workerIndex: number) {
+    const worker = this.workers[workerIndex]
+    if (!worker) throw new Error(`Allocation worker ${workerIndex} does not exist`)
+    return worker.applicationName
+  }
+
+  async executeUntilFailpoint(
+    workerIndex: number,
+    operation: MultiprocessOperation,
+    failpoint: AllocationFaultPoint
+  ) {
+    const worker = this.workers[workerIndex]
+    if (!worker) throw new Error(`Allocation worker ${workerIndex} does not exist`)
+    return await worker.executeUntilFailpoint(operation, failpoint)
   }
 
   async close() {

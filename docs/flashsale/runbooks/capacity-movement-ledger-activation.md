@@ -2,9 +2,9 @@
 
 ## 当前状态
 
-**禁止生产激活。** Phase 2A-2a 已提供事务内 writer 与单进程真实 PostgreSQL 证据，但跨进程
-kill/crash 矩阵仍属于 Phase 2A-2b。只有 2A-2b 通过并确认全部实例都运行同一 writer 协议后，才允许执行
-`activateAllocationMovementLedger({})`。
+**仍禁止生产激活。** Phase 2A-2b 已通过独立 Node 进程、真实 `child.kill` 和 PostgreSQL rollback barrier
+证明关键 crash/race 窗口；但生产启用还必须完成 Phase 2A-3 Reconcile/Rebuild 交付，并确认全部实例都运行
+同一 writer/binding 协议。不得仅凭 crash suite 通过就执行 `activateAllocationMovementLedger({})`。
 
 ## 激活前检查
 
@@ -63,6 +63,25 @@ kill/crash 矩阵仍属于 Phase 2A-2b。只有 2A-2b 通过并确认全部实�
 - Replay 只看 Attempt 的 `hold_movement_activation_id` / `terminal_movement_activation_id`：null 禁止对应
   Movement，非 null 必须等于 Control Activation 并要求完整集合。不得恢复为 timestamp cutover 推断。
 - v1 legacy Root 首次 Active Provision 必须在同一事务中原子升级为 schema v2 与 kind-aware digest。
+
+## Crash 证据复验
+
+运行 `yarn test:movement:crash`。该套件使用独立数据库
+`medusa-flash-sale-allocation-movement-crash`，必须 `--runInBand`，不得和其他会重建 Allocation schema 的
+套件并行。成功标准：五个业务场景和一个 Harness 异常清理回归全部通过，且 kill 后以激活重放取得
+exclusive advisory lock 作为回滚屏障；
+Crash 场景必须断言 kill 已成功发出且进程随后退出。三个竞态场景必须使用唯一 `application_name`，并在
+终止持锁方前从 `pg_stat_activity`/`pg_locks` 观测到竞争方 `wait_event_type='Lock'` 和未授予锁；仅凭
+该未授予锁必须为 `advisory`，且 `pg_blocking_pids(contender_pid)` 必须包含 holder Worker 唯一匹配的
+backend PID；仅凭 Promise 尚未完成不构成竞争证据。禁止添加固定 sleep 规避连接未清理问题。Windows/Linux 的 exit code 与
+signal 表示可能不同，断言不得写死。
+
+若首次 kill 返回 false 或等待 exit 超时，Harness 必须以原始错误拒绝所有 pending/reach promise、清除其
+计时器并标记 failed，使 `close()` 立即幂等返回；随后销毁 stdio、best-effort 再次 kill 并短时有界等待。
+
+若进程在 `failpoint_reached` 前退出、同一 worker 同时存在多个 crash 请求、Root replay 失败，或物理行计数
+（包括软删除行）不符合矩阵，均视为失败。详细矩阵见
+`benchmarks/phase-2a-2b-movement-crash-matrix-2026-09-21.md`。
 
 ## 版本与指纹语义
 
