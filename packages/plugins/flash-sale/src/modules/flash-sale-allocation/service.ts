@@ -65,6 +65,9 @@ import {
   AllocationPolicy,
   Capacity,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   CapacityMovement,
@@ -96,6 +99,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
   AllocationPolicy,
   Capacity,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   CapacityMovement,
@@ -724,6 +730,93 @@ class FlashSaleAllocationModuleService extends MedusaService({
 
   // @ts-expect-error Generated audit writes are intentionally disabled.
   async restoreCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async createCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async updateCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async deleteCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async softDeleteCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async restoreCapacityRepairApplyRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async createCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async updateCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async deleteCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async softDeleteCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async restoreCapacityRepairApplyActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async createCapacityRepairApplyIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async updateCapacityRepairApplyIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairApplyIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async deleteCapacityRepairApplyIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async softDeleteCapacityRepairApplyIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated append-only audit writes are intentionally disabled.
+  async restoreCapacityRepairApplyIdentities(): Promise<never> {
     return this.rejectDirectWrite()
   }
 }

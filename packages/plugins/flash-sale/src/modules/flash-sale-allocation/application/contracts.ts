@@ -483,6 +483,7 @@ export type PreparedDryRunCapacityRepairCommand = Readonly<{
 export type CapacityRepairPlanAction = Readonly<{
   id: string
   capacity_id: string
+  before_capacity_version: string | null
   before_granted_quantity: string
   before_held_quantity: string
   before_consumed_quantity: string
@@ -498,6 +499,7 @@ export type CapacityRepairPlanAction = Readonly<{
 export type DryRunCapacityRepairResult = Readonly<{
   disposition: "fresh" | "replay"
   run_id: string
+  plan_schema_version: 1 | 2
   status: "not_activated" | "no_changes" | "planned" | "manual_required"
   classification: LedgerIssueClassification | null
   evidence_digest: string
@@ -510,6 +512,87 @@ export interface CapacityRepairPlanStore {
     input: PreparedDryRunCapacityRepairCommand
   ): Promise<DryRunCapacityRepairResult>
 }
+
+export const MAX_CAPACITY_REPAIR_APPLY_ACTIONS = 100
+
+export type ApplyCapacityRepairCommand = Readonly<{
+  request_id?: string
+  idempotency_key?: string
+  plan_run_id: string
+  expected_plan_evidence_digest: string
+  action_ids: readonly string[]
+  requester: string
+  reason: string
+  ticket: string
+  approval_credential: string
+  approval_reference: string
+  statement_timeout_ms?: number
+}>
+
+export type RepairApprovalVerificationRequest = Readonly<{
+  credential: string
+  reference: string
+}>
+
+// Every field is supplied by the trusted verifier, never copied from the
+// caller command. The verifier must enforce a fixed algorithm/key allowlist,
+// issuer/audience/tenant/purpose/permission policy, signature and revocation;
+// it must reject alg=none and remote jku/x5u key discovery. Command preparation
+// adds defense-in-depth binding and freshness checks only.
+export type VerifiedRepairApproval = Readonly<{
+  approver: string
+  issuer: string
+  audience: string
+  tenant: string
+  jti: string
+  issued_at: Date
+  not_before: Date
+  expires_at: Date
+  roles: readonly string[]
+  purpose: "capacity_repair_apply"
+  permission_version: string
+  approval_reference: string
+  plan_schema_version: 2
+  campaign_id: string
+  plan_run_id: string
+  plan_evidence_digest: string
+  ordered_action_set_digest: string
+}>
+
+export interface RepairApprovalVerifier {
+  verify(
+    input: RepairApprovalVerificationRequest
+  ): Promise<VerifiedRepairApproval>
+}
+
+export type PreparedApplyCapacityRepairCommand = Readonly<{
+  request_identity_digest: string
+  command_digest: string
+  plan_run_id: string
+  plan_schema_version: 2
+  campaign_id: string
+  expected_plan_evidence_digest: string
+  ordered_action_ids: readonly string[]
+  ordered_action_set_digest: string
+  requester: string
+  reason: string
+  ticket: string
+  statement_timeout_ms: number
+  approval_token_digest: string
+  approval_claims_digest: string
+  approval_reference_digest: string
+  approver: string
+  approval_issuer: string
+  approval_audience: string
+  approval_tenant: string
+  approval_jti_digest: string
+  approval_permission_version: string
+  approval_issued_at: string
+  approval_not_before: string
+  approval_expires_at: string
+  approval_roles: readonly string[]
+  approval_purpose: "capacity_repair_apply"
+}>
 
 export interface AllocationStore
   extends AllocationQuotaStore,
@@ -564,6 +647,7 @@ export enum AllocationCommandErrorCode {
   OUTBOX_INVARIANT_VIOLATION = "OUTBOX_INVARIANT_VIOLATION",
   MOVEMENT_LEDGER_INVARIANT_VIOLATION = "MOVEMENT_LEDGER_INVARIANT_VIOLATION",
   REPAIR_PLAN_INVARIANT_VIOLATION = "REPAIR_PLAN_INVARIANT_VIOLATION",
+  REPAIR_APPROVAL_INVALID = "REPAIR_APPROVAL_INVALID",
 }
 
 export class AllocationCommandError extends Error {

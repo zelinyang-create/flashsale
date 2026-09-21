@@ -326,6 +326,7 @@ export class PostgresMovementLedgerReconciliationStore
           manager,
           `select source.id, source.allocation_policy_id,
                   source.campaign_item_id, source.shard_no::text as shard_no,
+                  source.version::text as version,
                   source.state,
                   source.granted_quantity::text as granted_quantity,
                   source.held_quantity::text as held_quantity,

@@ -6,6 +6,7 @@ import {
   ProvisionAllocationCommand,
   createAllocationConfigurationHash,
   prepareDryRunCapacityRepairCommand,
+  repairPlanDigest,
 } from "../application"
 import {
   AllocationCampaignFence,
@@ -18,6 +19,9 @@ import {
   CapacityMovementCheckpoint,
   CapacityMovementControl,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   PurchaseAttempt,
@@ -53,6 +57,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     CapacityMovementCheckpoint,
     CapacityMovementControl,
     CapacityRepairAction,
+    CapacityRepairApplyAction,
+    CapacityRepairApplyIdentity,
+    CapacityRepairApplyRun,
     CapacityRepairIdentity,
     CapacityRepairRun,
     PurchaseAttempt,
@@ -204,17 +211,33 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       const result = await dryRun(unique("request"), fixture.campaignId)
       expect(result).toMatchObject({
         disposition: "fresh",
+        plan_schema_version: 2,
         status: "planned",
         classification: "safe_repair",
         actions: [
           expect.objectContaining({
             capacity_id: fixture.capacityId,
+            before_capacity_version: "1",
             before_held_quantity: "1",
             expected_held_quantity: "0",
             status: "proposed",
           }),
         ],
       })
+      expect(
+        await execute(
+          `select plan_schema_version::text as plan_schema_version
+             from flash_sale_capacity_repair_run where id = ?`,
+          [result.run_id]
+        )
+      ).toEqual([{ plan_schema_version: "2" }])
+      expect(
+        await execute(
+          `select before_capacity_version::text as before_capacity_version
+             from flash_sale_capacity_repair_action where run_id = ?`,
+          [result.run_id]
+        )
+      ).toEqual([{ before_capacity_version: "1" }])
       expect(await businessSnapshot()).toEqual(before)
     })
 
@@ -364,6 +387,105 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       )
       await expect(dryRun(request, fixture.campaignId)).rejects.toMatchObject({
         code: "REPAIR_PLAN_INVARIANT_VIOLATION",
+      })
+    })
+
+    it("replays a frozen schema-v1 plan without adding version evidence", async () => {
+      const fixture = await safeFixture("legacy-replay")
+      const request = unique("legacy-replay-request")
+      const fresh = await dryRun(request, fixture.campaignId)
+      const [run] = (await execute(
+        `select command_digest, evidence_manifest, snapshot_at
+           from flash_sale_capacity_repair_run where id = ?`,
+        [fresh.run_id]
+      )) as Array<{
+        command_digest: string
+        evidence_manifest: Record<string, any>
+        snapshot_at: Date
+      }>
+      const actionRows = (await execute(
+        `select id, run_id, capacity_id, before_granted_quantity,
+                before_held_quantity, before_consumed_quantity,
+                before_raw_granted_quantity, before_raw_held_quantity,
+                before_raw_consumed_quantity, expected_granted_quantity,
+                expected_held_quantity, expected_consumed_quantity,
+                expected_raw_granted_quantity, expected_raw_held_quantity,
+                expected_raw_consumed_quantity, issue_codes, classification,
+                status, created_at, updated_at, deleted_at
+           from flash_sale_capacity_repair_action
+          where run_id = ? order by capacity_id, id`,
+        [fresh.run_id]
+      )) as Array<Record<string, any>>
+      const legacyActions = actionRows.map((row) => {
+        const content = {
+          ...row,
+          created_at: new Date(row.created_at).toISOString(),
+          updated_at: new Date(row.updated_at).toISOString(),
+          deleted_at: null,
+        }
+        return {
+          ...content,
+          id: String(row.id),
+          evidence_digest: repairPlanDigest({
+            schema: "capacity-repair-action-evidence-v2",
+            ...content,
+          }),
+        }
+      })
+      const legacyEvidenceManifest = {
+        ...run.evidence_manifest,
+        schema: "capacity-repair-evidence-manifest-v2",
+        physical: {
+          ...run.evidence_manifest.physical,
+          capacities: run.evidence_manifest.physical.capacities.map(
+            ({ version: _version, ...capacity }: Record<string, any>) => capacity
+          ),
+        },
+      }
+      const legacyEvidenceDigest = repairPlanDigest({
+        schema: "capacity-repair-run-evidence-v2",
+        command_digest: run.command_digest,
+        scope: fixture.campaignId,
+        evidence_manifest: legacyEvidenceManifest,
+        run_id: fresh.run_id,
+        actions: legacyActions.map(
+          ({ evidence_digest: _digest, ...action }) => action
+        ),
+      })
+      for (const action of legacyActions) {
+        await execute(
+          `update flash_sale_capacity_repair_action
+              set before_capacity_version = null, evidence_digest = ?
+            where id = ?`,
+          [action.evidence_digest, action.id]
+        )
+      }
+      await execute(
+        `update flash_sale_capacity_repair_run
+            set plan_schema_version = 1,
+                evidence_manifest = ?::jsonb,
+                evidence_digest = ?
+          where id = ?`,
+        [
+          JSON.stringify(legacyEvidenceManifest),
+          legacyEvidenceDigest,
+          fresh.run_id,
+        ]
+      )
+      await execute(
+        `update flash_sale_capacity_repair_identity
+            set evidence_digest = ? where run_id = ?`,
+        [legacyEvidenceDigest, fresh.run_id]
+      )
+
+      await expect(dryRun(request, fixture.campaignId)).resolves.toMatchObject({
+        disposition: "replay",
+        run_id: fresh.run_id,
+        plan_schema_version: 1,
+        evidence_digest: legacyEvidenceDigest,
+        actions: [
+          expect.objectContaining({ before_capacity_version: null }),
+        ],
       })
     })
 

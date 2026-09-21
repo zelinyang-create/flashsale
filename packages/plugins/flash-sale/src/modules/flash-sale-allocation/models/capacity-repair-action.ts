@@ -1,5 +1,6 @@
 import { model } from "@medusajs/framework/utils"
 import CapacityRepairRun from "./capacity-repair-run"
+import CapacityRepairApplyAction from "./capacity-repair-apply-action"
 
 const CapacityRepairAction = model
   .define(
@@ -11,6 +12,7 @@ const CapacityRepairAction = model
       id: model.id({ prefix: "fsrepact" }).primaryKey(),
       run: model.belongsTo(() => CapacityRepairRun, { mappedBy: "actions" }),
       capacity_id: model.text(),
+      before_capacity_version: model.number().nullable(),
       before_granted_quantity: model.text(),
       before_held_quantity: model.text(),
       before_consumed_quantity: model.text(),
@@ -27,6 +29,9 @@ const CapacityRepairAction = model
       classification: model.text(),
       evidence_digest: model.text(),
       status: model.text(),
+      apply_actions: model.hasMany(() => CapacityRepairApplyAction, {
+        mappedBy: "plan_action",
+      }),
     }
   )
   .indexes([
@@ -43,6 +48,11 @@ const CapacityRepairAction = model
     },
   ])
   .checks([
+    {
+      name: "CK_flash_sale_capacity_repair_action_version",
+      expression:
+        "before_capacity_version IS NULL OR before_capacity_version >= 1",
+    },
     {
       name: "CK_flash_sale_capacity_repair_action_digest",
       expression: "evidence_digest ~ '^[0-9a-f]{64}$'",

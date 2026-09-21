@@ -94,6 +94,9 @@ export type LedgerCapacityEntity = Readonly<{
   allocation_policy_id: string
   campaign_item_id: string
   shard_no: string
+  // Physical scans always provide this. Optionality keeps the pure projector
+  // decoupled from repair-plan optimistic concurrency evidence.
+  version?: string
   state: CapacityState | string
   granted_quantity: string
   held_quantity: string

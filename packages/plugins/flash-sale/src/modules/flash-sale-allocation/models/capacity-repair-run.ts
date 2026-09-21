@@ -1,5 +1,6 @@
 import { model } from "@medusajs/framework/utils"
 import CapacityRepairAction from "./capacity-repair-action"
+import CapacityRepairApplyRun from "./capacity-repair-apply-run"
 
 const CapacityRepairRun = model
   .define(
@@ -9,6 +10,7 @@ const CapacityRepairRun = model
     },
     {
       id: model.id({ prefix: "fsreprun" }).primaryKey(),
+      plan_schema_version: model.number().default(1),
       request_identity_digest: model.text(),
       command_digest: model.text(),
       campaign_id: model.text().nullable(),
@@ -28,6 +30,9 @@ const CapacityRepairRun = model
       snapshot_at: model.dateTime(),
       finished_at: model.dateTime(),
       actions: model.hasMany(() => CapacityRepairAction, { mappedBy: "run" }),
+      apply_runs: model.hasMany(() => CapacityRepairApplyRun, {
+        mappedBy: "plan_run",
+      }),
     }
   )
   .indexes([
@@ -44,6 +49,10 @@ const CapacityRepairRun = model
     },
   ])
   .checks([
+    {
+      name: "CK_flash_sale_capacity_repair_run_schema",
+      expression: "plan_schema_version IN (1, 2)",
+    },
     {
       name: "CK_flash_sale_capacity_repair_run_digests",
       expression:

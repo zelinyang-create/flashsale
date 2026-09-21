@@ -20,6 +20,9 @@ import {
   CapacityMovementCheckpoint,
   CapacityMovementControl,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   PurchaseAttempt,
@@ -52,6 +55,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     CapacityMovementCheckpoint,
     CapacityMovementControl,
     CapacityRepairAction,
+    CapacityRepairApplyAction,
+    CapacityRepairApplyIdentity,
+    CapacityRepairApplyRun,
     CapacityRepairIdentity,
     CapacityRepairRun,
     PurchaseAttempt,
@@ -222,7 +228,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     }
 
     describe("Flash-sale allocation schema", () => {
-      it("installs all fourteen Allocation-owned tables from generated migrations", async () => {
+      it("installs all seventeen Allocation-owned tables from generated migrations", async () => {
         const rows = (await execute(
           `select tablename
              from pg_tables
@@ -242,6 +248,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "flash_sale_capacity_movement_checkpoint",
           "flash_sale_capacity_movement_control",
           "flash_sale_capacity_repair_action",
+          "flash_sale_capacity_repair_apply_action",
+          "flash_sale_capacity_repair_apply_identity",
+          "flash_sale_capacity_repair_apply_run",
           "flash_sale_capacity_repair_identity",
           "flash_sale_capacity_repair_run",
           "flash_sale_purchase_attempt",
@@ -278,6 +287,12 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "IDX_flash_sale_capacity_repair_identity_run_unique",
           "IDX_flash_sale_capacity_repair_run_identity_unique",
           "IDX_flash_sale_capacity_repair_action_run_capacity_unique",
+          "IDX_flash_sale_capacity_repair_apply_identity_digest_unique",
+          "IDX_flash_sale_capacity_repair_apply_identity_run_unique",
+          "IDX_flash_sale_capacity_repair_apply_run_plan_unique",
+          "IDX_flash_sale_capacity_repair_apply_run_approval_jti_unique",
+          "IDX_flash_sale_capacity_repair_apply_action_plan_unique",
+          "IDX_flash_sale_capacity_repair_apply_action_run_capacity_unique",
         ]) {
           expect(definitions.get(index)).toContain("create unique index")
           expect(definitions.get(index)).not.toContain(" where ")
@@ -343,6 +358,18 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             target_table: "flash_sale_capacity_repair_run",
           },
           {
+            source_table: "flash_sale_capacity_repair_apply_action",
+            target_table: "flash_sale_capacity_repair_action",
+          },
+          {
+            source_table: "flash_sale_capacity_repair_apply_action",
+            target_table: "flash_sale_capacity_repair_apply_run",
+          },
+          {
+            source_table: "flash_sale_capacity_repair_apply_run",
+            target_table: "flash_sale_capacity_repair_run",
+          },
+          {
             source_table: "flash_sale_purchase_attempt",
             target_table: "flash_sale_allocation_policy",
           },
@@ -357,6 +384,33 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               where constraint_name = 'flash_sale_capacity_repair_action_run_id_foreign'`
           )
         ).toEqual([{ update_rule: "CASCADE", delete_rule: "NO ACTION" }])
+        expect(
+          await execute(
+            `select constraint_name, update_rule, delete_rule
+               from information_schema.referential_constraints
+              where constraint_name like 'flash_sale_capacity_repair_apply_%_foreign'
+              order by constraint_name`
+          )
+        ).toEqual([
+          {
+            constraint_name:
+              "flash_sale_capacity_repair_apply_action_apply_run_id_foreign",
+            update_rule: "CASCADE",
+            delete_rule: "NO ACTION",
+          },
+          {
+            constraint_name:
+              "flash_sale_capacity_repair_apply_action_plan_action_id_foreign",
+            update_rule: "CASCADE",
+            delete_rule: "NO ACTION",
+          },
+          {
+            constraint_name:
+              "flash_sale_capacity_repair_apply_run_plan_run_id_foreign",
+            update_rule: "CASCADE",
+            delete_rule: "NO ACTION",
+          },
+        ])
       })
 
       it("rejects invalid policy and capacity invariants in PostgreSQL", async () => {
@@ -393,10 +447,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         ) =>
           await execute(
             `insert into flash_sale_capacity_repair_run
-              (id, request_identity_digest, command_digest, status, classification,
+              (id, plan_schema_version, request_identity_digest, command_digest, status, classification,
                actor, reason, ticket, evidence_digest, issue_codes, issue_count,
                issue_manifest, evidence_manifest, snapshot_at, finished_at)
-             values (?, ?, ?, ?, ?, 'operator', 'schema check', 'INC-SCHEMA', ?,
+             values (?, 2, ?, ?, ?, ?, 'operator', 'schema check', 'INC-SCHEMA', ?,
                      '["held_quantity_drift"]'::jsonb, ?, ?::jsonb,
                      '{"schema":"test"}'::jsonb, now(), now())`,
             [
@@ -443,6 +497,191 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             [runId, digest("action-empty-issues")]
           )
         ).rejects.toThrow()
+      })
+
+      it("enforces final Apply receipt, approval, version, and uniqueness invariants", async () => {
+        const insertPlan = async (suffix: string) => {
+          const runId = `fsreprun_apply_${suffix}`
+          const actionId = `fsrepact_apply_${suffix}`
+          await execute(
+            `insert into flash_sale_capacity_repair_run
+              (id, plan_schema_version, request_identity_digest, command_digest,
+               campaign_id, status, classification, actor, reason, ticket,
+               evidence_digest, issue_codes, issue_count, issue_manifest,
+               evidence_manifest, snapshot_at, finished_at)
+             values (?, 2, ?, ?, 'campaign-apply', 'planned', 'safe_repair',
+                     'requester', 'schema check', 'INC-APPLY', ?,
+                     '["held_quantity_drift"]'::jsonb, 1,
+                     '[{"code":"held_quantity_drift"}]'::jsonb,
+                     '{"schema":"v3"}'::jsonb, now(), now())`,
+            [
+              runId,
+              digest(`apply-identity-${suffix}`),
+              digest(`apply-command-${suffix}`),
+              digest(`apply-evidence-${suffix}`),
+            ]
+          )
+          await execute(
+            `insert into flash_sale_capacity_repair_action
+              (id, run_id, capacity_id, before_capacity_version,
+               before_granted_quantity, before_held_quantity,
+               before_consumed_quantity, before_raw_granted_quantity,
+               before_raw_held_quantity, before_raw_consumed_quantity,
+               expected_granted_quantity, expected_held_quantity,
+               expected_consumed_quantity, expected_raw_granted_quantity,
+               expected_raw_held_quantity, expected_raw_consumed_quantity,
+               issue_codes, classification, evidence_digest, status)
+             values (?, ?, ?, 3, '10', '1', '0', '10', '1', '0',
+                     '10', '0', '0', '10', '0', '0',
+                     '["held_quantity_drift"]'::jsonb, 'safe_repair', ?,
+                     'proposed')`,
+            [
+              actionId,
+              runId,
+              `capacity-apply-${suffix}`,
+              digest(`apply-action-evidence-${suffix}`),
+            ]
+          )
+          return { runId, actionId }
+        }
+        const insertApplyRun = async (
+          id: string,
+          planRunId: string,
+          overrides: {
+            planSchema?: number
+            status?: string
+            purpose?: string
+            roles?: string
+            approver?: string
+            jtiDigest?: string
+          } = {}
+        ) =>
+          await execute(
+            `insert into flash_sale_capacity_repair_apply_run
+              (id, plan_run_id, plan_schema_version, campaign_id,
+               command_digest, plan_evidence_digest, ordered_action_set_digest,
+               approval_token_digest, approval_claims_digest,
+               approval_reference_digest, approver, approval_issuer,
+               approval_audience, approval_tenant, approval_jti_digest,
+               approval_permission_version, approval_roles, approval_purpose,
+               approval_issued_at, approval_not_before, approval_expires_at,
+               requester, reason, ticket, status, result_digest, finished_at)
+             values (?, ?, ?, 'campaign-apply', ?, ?, ?, ?, ?, ?, ?,
+                     'issuer', 'audience', 'tenant', ?, 'rbac-v1', ?::jsonb,
+                     ?, '2026-09-21T00:00:00Z', '2026-09-21T00:00:00Z',
+                     '2026-09-21T01:00:00Z', 'requester', 'approved',
+                     'INC-APPLY', ?, ?, '2026-09-21T00:30:00Z')`,
+            [
+              id,
+              planRunId,
+              overrides.planSchema ?? 2,
+              digest(`apply-command-${id}`),
+              digest(`apply-plan-evidence-${id}`),
+              digest(`apply-action-set-${id}`),
+              digest(`apply-token-${id}`),
+              digest(`apply-claims-${id}`),
+              digest(`apply-reference-${id}`),
+              overrides.approver ?? "approver",
+              overrides.jtiDigest ?? digest(`apply-jti-${id}`),
+              overrides.roles ?? '["repair-approver"]',
+              overrides.purpose ?? "capacity_repair_apply",
+              overrides.status ?? "applied",
+              digest(`apply-result-${id}`),
+            ]
+          )
+
+        const first = await insertPlan("first")
+        await expect(
+          insertApplyRun("fsraprun_bad_schema", first.runId, {
+            planSchema: 1,
+          })
+        ).rejects.toThrow()
+        await expect(
+          insertApplyRun("fsraprun_bad_roles", first.runId, { roles: "[]" })
+        ).rejects.toThrow()
+        await expect(
+          insertApplyRun("fsraprun_bad_purpose", first.runId, {
+            purpose: "other",
+          })
+        ).rejects.toThrow()
+        await expect(
+          insertApplyRun("fsraprun_bad_requester", first.runId, {
+            approver: "requester",
+          })
+        ).rejects.toThrow()
+        await insertApplyRun("fsraprun_valid", first.runId)
+        await expect(
+          insertApplyRun("fsraprun_duplicate_plan", first.runId)
+        ).rejects.toThrow()
+
+        await expect(
+          execute(
+            `insert into flash_sale_capacity_repair_apply_action
+              (id, apply_run_id, plan_action_id, capacity_id,
+               before_capacity_version, after_capacity_version,
+               before_granted_quantity, before_held_quantity,
+               before_consumed_quantity, before_raw_granted_quantity,
+               before_raw_held_quantity, before_raw_consumed_quantity,
+               after_granted_quantity, after_held_quantity,
+               after_consumed_quantity, after_raw_granted_quantity,
+               after_raw_held_quantity, after_raw_consumed_quantity,
+               evidence_digest, status)
+             values ('fsrapact_bad_version', 'fsraprun_valid', ?,
+                     'capacity-apply-first', 3, 5, '10', '1', '0',
+                     '10', '1', '0', '10', '0', '0', '10', '0', '0', ?,
+                     'applied')`,
+            [first.actionId, digest("bad-apply-action")]
+          )
+        ).rejects.toThrow()
+        await expect(
+          execute(
+            `insert into flash_sale_capacity_repair_apply_action
+              (id, apply_run_id, plan_action_id, capacity_id,
+               before_capacity_version, after_capacity_version,
+               before_granted_quantity, before_held_quantity,
+               before_consumed_quantity, before_raw_granted_quantity,
+               before_raw_held_quantity, before_raw_consumed_quantity,
+               after_granted_quantity, after_held_quantity,
+               after_consumed_quantity, after_raw_granted_quantity,
+               after_raw_held_quantity, after_raw_consumed_quantity,
+               evidence_digest, status)
+             values ('fsrapact_bad_raw_granted', 'fsraprun_valid', ?,
+                     'capacity-apply-first', 3, 4, '10', '1', '0',
+                     '9', '2', '1', '10', '0', '0', '10', '0', '0', ?,
+                     'applied')`,
+            [first.actionId, digest("bad-raw-granted-apply-action")]
+          )
+        ).rejects.toThrow()
+        await execute(
+          `insert into flash_sale_capacity_repair_apply_action
+            (id, apply_run_id, plan_action_id, capacity_id,
+             before_capacity_version, after_capacity_version,
+             before_granted_quantity, before_held_quantity,
+             before_consumed_quantity, before_raw_granted_quantity,
+             before_raw_held_quantity, before_raw_consumed_quantity,
+             after_granted_quantity, after_held_quantity,
+             after_consumed_quantity, after_raw_granted_quantity,
+             after_raw_held_quantity, after_raw_consumed_quantity,
+             evidence_digest, status)
+           values ('fsrapact_valid', 'fsraprun_valid', ?,
+                   'capacity-apply-first', 3, 4, '10', '1', '0',
+                   '10', '2', '1', '10', '0', '0', '10', '0', '0', ?,
+                   'applied')`,
+          [first.actionId, digest("valid-apply-action")]
+        )
+      })
+
+      it("keeps the schema guard out of normal live identity reads", async () => {
+        expect(
+          await execute(
+            `select count(*)::integer as live_rows,
+                    count(*) filter (where deleted_at is not null)::integer as physical_deleted_rows
+               from flash_sale_capacity_repair_identity`
+          )
+        ).toEqual([{ live_rows: 1, physical_deleted_rows: 1 }])
+        expect(
+          await service.listCapacityRepairIdentities({}, { take: 10 })
+        ).toEqual([])
       })
 
       it("enforces one valid terminal fence per campaign", async () => {
@@ -698,6 +937,24 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "deleteCapacityRepairIdentities",
           "softDeleteCapacityRepairIdentities",
           "restoreCapacityRepairIdentities",
+          "createCapacityRepairApplyRuns",
+          "updateCapacityRepairApplyRuns",
+          "upsertCapacityRepairApplyRuns",
+          "deleteCapacityRepairApplyRuns",
+          "softDeleteCapacityRepairApplyRuns",
+          "restoreCapacityRepairApplyRuns",
+          "createCapacityRepairApplyActions",
+          "updateCapacityRepairApplyActions",
+          "upsertCapacityRepairApplyActions",
+          "deleteCapacityRepairApplyActions",
+          "softDeleteCapacityRepairApplyActions",
+          "restoreCapacityRepairApplyActions",
+          "createCapacityRepairApplyIdentities",
+          "updateCapacityRepairApplyIdentities",
+          "upsertCapacityRepairApplyIdentities",
+          "deleteCapacityRepairApplyIdentities",
+          "softDeleteCapacityRepairApplyIdentities",
+          "restoreCapacityRepairApplyIdentities",
         ] as const
 
         for (const methodName of methodNames) {

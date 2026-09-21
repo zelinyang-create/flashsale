@@ -17,6 +17,7 @@ describe("DryRunCapacityRepairHandler", () => {
         return {
           disposition: "fresh",
           run_id: "run-1",
+          plan_schema_version: 2,
           status: "no_changes",
           classification: null,
           evidence_digest: "a".repeat(64),

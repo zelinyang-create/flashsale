@@ -23,6 +23,12 @@ const FIELDS = new Set([
   "batch_size",
 ])
 
+// Reserved by the 3d-1 compatibility migration. It can never represent a
+// caller request and keeps the pushed 3c named-down migration fail closed
+// while the successor schema is installed.
+export const CAPACITY_REPAIR_SCHEMA_GUARD_REQUEST_DIGEST =
+  "e779104ac873087f07944c3c5319ee4fac4fb5735c8571080b4f19502052b009"
+
 export function compareRepairPlanKeys(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
@@ -178,6 +184,9 @@ export function prepareDryRunCapacityRepairCommand(
     identity_type: identityType,
     identity,
   })
+  if (requestIdentityDigest === CAPACITY_REPAIR_SCHEMA_GUARD_REQUEST_DIGEST) {
+    invalid("request identity is reserved for schema compatibility")
+  }
   const canonical = {
     schema: "capacity-repair-command-v1",
     request_identity_digest: requestIdentityDigest,

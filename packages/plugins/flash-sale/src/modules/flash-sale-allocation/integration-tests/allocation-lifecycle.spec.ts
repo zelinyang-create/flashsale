@@ -21,6 +21,9 @@ import {
   CapacityMovementCheckpoint,
   CapacityMovementControl,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   PurchaseAttempt,
@@ -59,6 +62,9 @@ const models = [
   CapacityMovementCheckpoint,
   CapacityMovementControl,
   CapacityRepairAction,
+  CapacityRepairApplyAction,
+  CapacityRepairApplyIdentity,
+  CapacityRepairApplyRun,
   CapacityRepairIdentity,
   CapacityRepairRun,
   PurchaseAttempt,
@@ -78,6 +84,19 @@ const ALLOCATION_MIGRATION = {
   MOVEMENT_CHECKPOINT_KIND: "Migration20260921064136",
   MOVEMENT_ATTEMPT_BINDING: "Migration20260921071902",
   CAPACITY_REPAIR_AUDIT: "Migration20260921105955",
+  CAPACITY_REPAIR_APPLY_SCHEMA: "Migration20260921124130",
+} as const
+
+const REPAIR_SCHEMA_GUARD = {
+  id: "__capacity_repair_3d1_schema_guard__",
+  runId: "__capacity_repair_3d1_no_run__",
+  requestDigest:
+    "e779104ac873087f07944c3c5319ee4fac4fb5735c8571080b4f19502052b009",
+  commandDigest:
+    "06b165a9621e493b68521259822e2d62cf73e297d23d782b9e990f749343d585",
+  evidenceDigest:
+    "34d4204efb3978123bad26355611874e82856ac2189709c339a5e2d7b240642d",
+  at: "2000-01-01T00:00:00.000Z",
 } as const
 
 type NamedMigrator = {
@@ -99,27 +118,353 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleModels: models,
   pathToMigrations: allocationMigrations,
   testSuite: ({ MikroOrmWrapper, service }) => {
-    it("reverts an empty repair audit and reapplies its generated migration", async () => {
+    it("reverts empty Apply then Plan audit migrations and reapplies them", async () => {
       const manager = MikroOrmWrapper.forkManager()
       const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await downNamed(
+        migrator,
+        ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA
+      )
       await downNamed(migrator, ALLOCATION_MIGRATION.CAPACITY_REPAIR_AUDIT)
       expect(
         await manager.execute(
           `select
              to_regclass('public.flash_sale_capacity_repair_run') as run_table,
              to_regclass('public.flash_sale_capacity_repair_action') as action_table,
-             to_regclass('public.flash_sale_capacity_repair_identity') as identity_table`
+             to_regclass('public.flash_sale_capacity_repair_identity') as identity_table,
+             to_regclass('public.flash_sale_capacity_repair_apply_run') as apply_run_table`
         )
-      ).toEqual([{ run_table: null, action_table: null, identity_table: null }])
+      ).toEqual([
+        {
+          run_table: null,
+          action_table: null,
+          identity_table: null,
+          apply_run_table: null,
+        },
+      ])
       await migrator.up()
       expect(
         await manager.execute(
           `select
              to_regclass('public.flash_sale_capacity_repair_run') is not null as run_table,
              to_regclass('public.flash_sale_capacity_repair_action') is not null as action_table,
-             to_regclass('public.flash_sale_capacity_repair_identity') is not null as identity_table`
+             to_regclass('public.flash_sale_capacity_repair_identity') is not null as identity_table,
+             to_regclass('public.flash_sale_capacity_repair_apply_run') is not null as apply_run_table`
         )
-      ).toEqual([{ run_table: true, action_table: true, identity_table: true }])
+      ).toEqual([
+        {
+          run_table: true,
+          action_table: true,
+          identity_table: true,
+          apply_run_table: true,
+        },
+      ])
+    })
+
+    it("blocks direct named 3c down while the 3d-1 guard is installed", async () => {
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_AUDIT],
+        })
+      ).rejects.toThrow("refusing to downgrade non-empty capacity repair audit")
+    })
+
+    it("upgrades existing schema-v1 Plan evidence without changing it", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await downNamed(
+        migrator,
+        ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_run
+          (id, request_identity_digest, command_digest, status, classification,
+           actor, reason, ticket, evidence_digest, issue_codes, issue_count,
+           issue_manifest, evidence_manifest, snapshot_at, finished_at)
+         values ('fsreprun_v1_upgrade', ?, ?, 'planned', 'safe_repair',
+                 'operator', 'legacy plan', 'INC-V1', ?,
+                 '["held_quantity_drift"]'::jsonb, 1,
+                 '[{"code":"held_quantity_drift"}]'::jsonb,
+                 '{"schema":"capacity-repair-evidence-manifest-v2"}'::jsonb,
+                 '2026-09-21T00:00:00Z', '2026-09-21T00:00:00Z')`,
+        ["1".repeat(64), "2".repeat(64), "3".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_action
+          (id, run_id, capacity_id, before_granted_quantity,
+           before_held_quantity, before_consumed_quantity,
+           before_raw_granted_quantity, before_raw_held_quantity,
+           before_raw_consumed_quantity, expected_granted_quantity,
+           expected_held_quantity, expected_consumed_quantity,
+           expected_raw_granted_quantity, expected_raw_held_quantity,
+           expected_raw_consumed_quantity, issue_codes, classification,
+           evidence_digest, status)
+         values ('fsrepact_v1_upgrade', 'fsreprun_v1_upgrade', 'capacity-v1',
+                 '10', '1', '0', '10', '1', '0', '10', '0', '0',
+                 '10', '0', '0', '["held_quantity_drift"]'::jsonb,
+                 'safe_repair', ?, 'proposed')`,
+        ["4".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_identity
+          (id, request_identity_digest, run_id, command_digest, evidence_digest)
+         values ('fsrepid_v1_upgrade', ?, 'fsreprun_v1_upgrade', ?, ?)`,
+        ["1".repeat(64), "2".repeat(64), "3".repeat(64)]
+      )
+
+      await migrator.up()
+      expect(
+        await manager.execute(
+          `select run.plan_schema_version::text as schema_version,
+                  action.before_capacity_version::text as capacity_version
+             from flash_sale_capacity_repair_run run
+             join flash_sale_capacity_repair_action action on action.run_id = run.id
+            where run.id = 'fsreprun_v1_upgrade'`
+        )
+      ).toEqual([{ schema_version: "1", capacity_version: null }])
+
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_run
+          (id, request_identity_digest, command_digest, status, classification,
+           actor, reason, ticket, evidence_digest, issue_codes, issue_count,
+           issue_manifest, evidence_manifest, snapshot_at, finished_at)
+         values ('fsreprun_v1_old_binary', ?, ?, 'planned', 'safe_repair',
+                 'operator', 'rolling old producer', 'INC-V1-ROLLING', ?,
+                 '["held_quantity_drift"]'::jsonb, 1,
+                 '[{"code":"held_quantity_drift"}]'::jsonb,
+                 '{"schema":"capacity-repair-evidence-manifest-v2"}'::jsonb,
+                 '2026-09-21T00:01:00Z', '2026-09-21T00:01:00Z')`,
+        ["8".repeat(64), "9".repeat(64), "a".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_action
+          (id, run_id, capacity_id, before_granted_quantity,
+           before_held_quantity, before_consumed_quantity,
+           before_raw_granted_quantity, before_raw_held_quantity,
+           before_raw_consumed_quantity, expected_granted_quantity,
+           expected_held_quantity, expected_consumed_quantity,
+           expected_raw_granted_quantity, expected_raw_held_quantity,
+           expected_raw_consumed_quantity, issue_codes, classification,
+           evidence_digest, status)
+         values ('fsrepact_v1_old_binary', 'fsreprun_v1_old_binary',
+                 'capacity-v1-old-binary', '10', '1', '0', '10', '1', '0',
+                 '10', '0', '0', '10', '0', '0',
+                 '["held_quantity_drift"]'::jsonb, 'safe_repair', ?, 'proposed')`,
+        ["b".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_identity
+          (id, request_identity_digest, run_id, command_digest, evidence_digest)
+         values ('fsrepid_v1_old_binary', ?, 'fsreprun_v1_old_binary', ?, ?)`,
+        ["8".repeat(64), "9".repeat(64), "a".repeat(64)]
+      )
+      expect(
+        await manager.execute(
+          `select run.plan_schema_version::text as schema_version,
+                  action.before_capacity_version::text as capacity_version
+             from flash_sale_capacity_repair_run run
+             join flash_sale_capacity_repair_action action on action.run_id = run.id
+            where run.id = 'fsreprun_v1_old_binary'`
+        )
+      ).toEqual([{ schema_version: "1", capacity_version: null }])
+
+      await downNamed(
+        migrator,
+        ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA
+      )
+      expect(
+        await manager.execute(
+          `select count(*)::integer as rows
+             from flash_sale_capacity_repair_run
+            where id = 'fsreprun_v1_upgrade'`
+        )
+      ).toEqual([{ rows: 1 }])
+      await migrator.up()
+    })
+
+    it("blocks 3d-1 down for schema-v2 or Apply physical evidence", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_run
+          (id, plan_schema_version, request_identity_digest, command_digest,
+           status, actor, reason, ticket, evidence_digest, issue_codes,
+           issue_count, issue_manifest, evidence_manifest, snapshot_at, finished_at)
+         values ('fsreprun_v2_guard', 2, ?, ?, 'no_changes', 'operator',
+                 'v2 guard', 'INC-V2', ?, '[]'::jsonb, 0, '[]'::jsonb,
+                 '{"schema":"v3"}'::jsonb, now(), now())`,
+        ["5".repeat(64), "6".repeat(64), "7".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_identity
+          (id, request_identity_digest, run_id, command_digest, evidence_digest)
+         values ('fsrepid_v2_guard', ?, 'fsreprun_v2_guard', ?, ?)`,
+        ["5".repeat(64), "6".repeat(64), "7".repeat(64)]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA],
+        })
+      ).rejects.toThrow(
+        "refusing to downgrade schema-v2 or ambiguous capacity repair Plan audit"
+      )
+
+      await manager.execute(
+        `delete from flash_sale_capacity_repair_identity where id = 'fsrepid_v2_guard'`
+      )
+      await manager.execute(
+        `delete from flash_sale_capacity_repair_run where id = 'fsreprun_v2_guard'`
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_apply_identity
+          (id, request_identity_digest, apply_run_id, command_digest)
+         values ('fsrapid_only', ?, 'fsraprun_missing', ?)`,
+        ["8".repeat(64), "9".repeat(64)]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA],
+        })
+      ).rejects.toThrow(
+        "refusing to downgrade non-empty capacity repair Apply audit"
+      )
+    })
+
+    it("fails 3d-1 down when its compatibility guard is missing or drifted", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `delete from flash_sale_capacity_repair_identity where id = ?`,
+        [REPAIR_SCHEMA_GUARD.id]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA],
+        })
+      ).rejects.toThrow("capacity repair 3d-1 schema guard missing or drifted")
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_identity
+          (id, request_identity_digest, run_id, command_digest, evidence_digest,
+           created_at, updated_at, deleted_at)
+         values (?, ?, ?, ?, ?, ?::timestamptz, ?::timestamptz, ?::timestamptz)`,
+        [
+          REPAIR_SCHEMA_GUARD.id,
+          REPAIR_SCHEMA_GUARD.requestDigest,
+          REPAIR_SCHEMA_GUARD.runId,
+          REPAIR_SCHEMA_GUARD.commandDigest,
+          REPAIR_SCHEMA_GUARD.evidenceDigest,
+          REPAIR_SCHEMA_GUARD.at,
+          REPAIR_SCHEMA_GUARD.at,
+          REPAIR_SCHEMA_GUARD.at,
+        ]
+      )
+      await manager.execute(
+        `update flash_sale_capacity_repair_identity
+            set evidence_digest = ? where id = ?`,
+        ["f".repeat(64), REPAIR_SCHEMA_GUARD.id]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA],
+        })
+      ).rejects.toThrow("capacity repair 3d-1 schema guard missing or drifted")
+      await manager.execute(
+        `update flash_sale_capacity_repair_identity
+            set evidence_digest = ? where id = ?`,
+        [REPAIR_SCHEMA_GUARD.evidenceDigest, REPAIR_SCHEMA_GUARD.id]
+      )
+    })
+
+    it("re-runs 3d-1 up idempotently and rejects a conflicting guard", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `delete from mikro_orm_migrations where name = ?`,
+        [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA]
+      )
+      await migrator.up()
+      expect(
+        await manager.execute(
+          `select count(*)::integer as rows
+             from flash_sale_capacity_repair_identity
+            where id = ?`,
+          [REPAIR_SCHEMA_GUARD.id]
+        )
+      ).toEqual([{ rows: 1 }])
+
+      await manager.execute(
+        `update flash_sale_capacity_repair_identity
+            set run_id = '__capacity_repair_3d1_conflict__' where id = ?`,
+        [REPAIR_SCHEMA_GUARD.id]
+      )
+      await manager.execute(
+        `delete from mikro_orm_migrations where name = ?`,
+        [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA]
+      )
+      await expect(migrator.up()).rejects.toThrow(
+        "capacity repair 3d-1 schema guard conflicts or drifted"
+      )
+      await manager.execute(
+        `update flash_sale_capacity_repair_identity
+            set run_id = ? where id = ?`,
+        [REPAIR_SCHEMA_GUARD.runId, REPAIR_SCHEMA_GUARD.id]
+      )
+      await migrator.up()
+    })
+
+    it("re-converges Apply checks under lock and rejects invalid existing rows", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      const constraint = "ck_flash_sale_capacity_repair_apply_identity_digests"
+
+      await manager.execute(
+        `alter table flash_sale_capacity_repair_apply_identity
+           drop constraint ${constraint}`
+      )
+      await manager.execute(
+        `delete from mikro_orm_migrations where name = ?`,
+        [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA]
+      )
+      await migrator.up()
+      expect(
+        await manager.execute(
+          `select count(*)::integer as constraints
+             from pg_constraint
+            where conrelid = 'flash_sale_capacity_repair_apply_identity'::regclass
+              and conname = ?`,
+          [constraint]
+        )
+      ).toEqual([{ constraints: 1 }])
+      await expect(
+        manager.execute(
+          `insert into flash_sale_capacity_repair_apply_identity
+            (id, request_identity_digest, apply_run_id, command_digest)
+           values ('fsrapid_invalid_check_probe', 'invalid',
+                   'fsraprun_invalid_check_probe', 'invalid')`
+        )
+      ).rejects.toThrow()
+
+      await manager.execute(
+        `alter table flash_sale_capacity_repair_apply_identity
+           drop constraint ${constraint}`
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_apply_identity
+          (id, request_identity_digest, apply_run_id, command_digest)
+         values ('fsrapid_invalid_existing', 'invalid',
+                 'fsraprun_invalid_existing', 'invalid')`
+      )
+      await manager.execute(
+        `delete from mikro_orm_migrations where name = ?`,
+        [ALLOCATION_MIGRATION.CAPACITY_REPAIR_APPLY_SCHEMA]
+      )
+      await expect(migrator.up()).rejects.toThrow()
+      await manager.execute(
+        `delete from flash_sale_capacity_repair_apply_identity
+          where id = 'fsrapid_invalid_existing'`
+      )
+      await migrator.up()
     })
 
     it("blocks repair-audit downgrade when any physical row exists", async () => {
@@ -127,10 +472,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       const migrator = MikroOrmWrapper.getOrm().getMigrator()
       await manager.execute(
         `insert into flash_sale_capacity_repair_run
-          (id, request_identity_digest, command_digest, status, actor, reason,
+          (id, plan_schema_version, request_identity_digest, command_digest, status, actor, reason,
            ticket, evidence_digest, issue_codes, issue_count, issue_manifest,
            evidence_manifest, snapshot_at, finished_at)
-         values ('fsreprun_guard', ?, ?, 'not_activated', 'operator', 'guard',
+         values ('fsreprun_guard', 2, ?, ?, 'not_activated', 'operator', 'guard',
                  'INC-GUARD', ?, '[]'::jsonb, 0, '[]'::jsonb,
                  '{"schema":"test"}'::jsonb, now(), now())`,
         ["a".repeat(64), "b".repeat(64), "c".repeat(64)]

@@ -43,6 +43,7 @@ type RepairIdentityRow = Readonly<{
 
 type RepairRunRow = Readonly<{
   id: string
+  plan_schema_version: string | number
   request_identity_digest: string
   command_digest: string
   campaign_id: string | null
@@ -70,6 +71,7 @@ type RepairActionRow = Readonly<{
   id: string
   run_id: string
   capacity_id: string
+  before_capacity_version: string | null
   before_granted_quantity: string
   before_held_quantity: string
   before_consumed_quantity: string
@@ -90,6 +92,8 @@ type RepairActionRow = Readonly<{
   updated_at: Date | string
   deleted_at: Date | string | null
 }>
+
+type LegacyRepairActionRow = Omit<RepairActionRow, "before_capacity_version">
 
 const REPAIR_IDENTITY_UNIQUE =
   "IDX_flash_sale_capacity_repair_identity_digest_unique"
@@ -138,6 +142,24 @@ function mirrorValue(raw: LedgerCapacityEntity["raw_granted_quantity"]): string 
     // The projector has already classified invalid mirrors as manual-required.
   }
   invariant("repair action raw decimal evidence is incomplete")
+}
+
+function capacityVersion(value: string | undefined): string {
+  if (!value || !/^[1-9][0-9]*$/.test(value)) {
+    invariant("repair action Capacity version evidence is incomplete")
+  }
+  return value
+}
+
+function withoutCapacityVersions(
+  manifest: MovementLedgerReconciliationEvidence["physical_manifest"]
+): MovementLedgerReconciliationEvidence["physical_manifest"] {
+  return {
+    ...manifest,
+    capacities: manifest.capacities.map(({ version: _version, ...capacity }) =>
+      capacity
+    ),
+  }
 }
 
 function issueOrder(
@@ -423,7 +445,8 @@ export class PostgresCapacityRepairPlanStore
       [input.request_identity_digest, runId]
     )) as RepairIdentityRow[]
     const runs = (await manager.execute(
-      `select id, request_identity_digest, command_digest, campaign_id,
+      `select id, plan_schema_version::text as plan_schema_version,
+              request_identity_digest, command_digest, campaign_id,
               activation_id, control_schema_version::text as control_schema_version,
               control_root_digest, status, classification, actor, reason, ticket,
               evidence_digest, issue_codes, issue_count, issue_manifest,
@@ -442,6 +465,12 @@ export class PostgresCapacityRepairPlanStore
     }
     const existingIdentity = identities[0]
     const existingRun = runs[0]
+    const planSchemaVersion = existingRun
+      ? Number(existingRun.plan_schema_version)
+      : 2
+    if (planSchemaVersion !== 1 && planSchemaVersion !== 2) {
+      invariant("repair Run has an unsupported plan schema version")
+    }
     const auditAt = existingRun ? iso(existingRun.snapshot_at) : iso(currentSnapshotAt)
 
     const issuesByCapacity = new Map<string, LedgerReconciliationIssueCode[]>()
@@ -451,7 +480,7 @@ export class PostgresCapacityRepairPlanStore
       codes.push(issue.code)
       issuesByCapacity.set(issue.capacity_id, codes)
     }
-    const actions: RepairActionRow[] =
+    const versionedActions: RepairActionRow[] =
       domain.classification === "safe_repair"
         ? expectedCapacities.flatMap((expected) => {
             const before = beforeById.get(expected.capacity_id)
@@ -468,6 +497,7 @@ export class PostgresCapacityRepairPlanStore
               id,
               run_id: runId,
               capacity_id: expected.capacity_id,
+              before_capacity_version: capacityVersion(before.version),
               before_granted_quantity: before.granted_quantity,
               before_held_quantity: before.held_quantity,
               before_consumed_quantity: before.consumed_quantity,
@@ -491,7 +521,7 @@ export class PostgresCapacityRepairPlanStore
               {
                 ...content,
                 evidence_digest: repairPlanDigest({
-                  schema: "capacity-repair-action-evidence-v2",
+                  schema: "capacity-repair-action-evidence-v3",
                   ...content,
                 }),
               },
@@ -499,8 +529,31 @@ export class PostgresCapacityRepairPlanStore
           })
         : []
 
-    const evidenceManifest = {
+    // Frozen schema-v1 replay codec. Capacity.version, the Action version and
+    // all new schema tags are intentionally absent so historical evidence is
+    // validated byte-for-byte instead of being silently upgraded in place.
+    const legacyActions = versionedActions.map(
+      ({ before_capacity_version: _version, evidence_digest: _digest, ...action }) => ({
+        ...action,
+        evidence_digest: repairPlanDigest({
+          schema: "capacity-repair-action-evidence-v2",
+          ...action,
+        }),
+      })
+    )
+    const legacyEvidenceManifest = {
       schema: "capacity-repair-evidence-manifest-v2",
+      physical: withoutCapacityVersions(manifest),
+      projection: {
+        status: domain.status,
+        classification: domain.classification,
+        issues: issueManifest,
+        expected_capacities: expectedCapacities,
+        subject_counter_derivation: domain.subject_counter_derivation,
+      },
+    }
+    const versionedEvidenceManifest = {
+      schema: "capacity-repair-evidence-manifest-v3",
       physical: manifest,
       projection: {
         status: domain.status,
@@ -510,14 +563,32 @@ export class PostgresCapacityRepairPlanStore
         subject_counter_derivation: domain.subject_counter_derivation,
       },
     }
-    const evidenceDigest = repairPlanDigest({
+    const legacyEvidenceDigest = repairPlanDigest({
       schema: "capacity-repair-run-evidence-v2",
       command_digest: input.command_digest,
       scope: input.campaign_id ?? null,
-      evidence_manifest: evidenceManifest,
+      evidence_manifest: legacyEvidenceManifest,
       run_id: runId,
-      actions: actions.map(({ evidence_digest: _digest, ...action }) => action),
+      actions: legacyActions.map(({ evidence_digest: _digest, ...action }) => action),
     })
+    const versionedEvidenceDigest = repairPlanDigest({
+      schema: "capacity-repair-run-evidence-v3",
+      plan_schema_version: 2,
+      command_digest: input.command_digest,
+      scope: input.campaign_id ?? null,
+      evidence_manifest: versionedEvidenceManifest,
+      run_id: runId,
+      actions: versionedActions.map(
+        ({ evidence_digest: _digest, ...action }) => action
+      ),
+    })
+    const actions = planSchemaVersion === 1 ? legacyActions : versionedActions
+    const evidenceManifest =
+      planSchemaVersion === 1
+        ? legacyEvidenceManifest
+        : versionedEvidenceManifest
+    const evidenceDigest =
+      planSchemaVersion === 1 ? legacyEvidenceDigest : versionedEvidenceDigest
     const expectedIdentity = {
       id: identityId,
       request_identity_digest: input.request_identity_digest,
@@ -530,6 +601,7 @@ export class PostgresCapacityRepairPlanStore
     }
     const expectedRun = {
       id: runId,
+      plan_schema_version: planSchemaVersion,
       request_identity_digest: input.request_identity_digest,
       command_digest: input.command_digest,
       campaign_id: input.campaign_id ?? null,
@@ -561,17 +633,31 @@ export class PostgresCapacityRepairPlanStore
       }
       const normalizedRun = {
         ...existingRun,
+        plan_schema_version: Number(existingRun.plan_schema_version),
         issue_count: Number(existingRun.issue_count),
         snapshot_at: iso(existingRun.snapshot_at),
         finished_at: iso(existingRun.finished_at),
         created_at: iso(existingRun.created_at),
         updated_at: iso(existingRun.updated_at),
       }
-      if (!same(normalizedIdentity, expectedIdentity) || !same(normalizedRun, expectedRun)) {
+      const comparableRun =
+        planSchemaVersion === 1
+          ? (({ plan_schema_version: _schema, ...run }) => run)(normalizedRun)
+          : normalizedRun
+      const comparableExpectedRun =
+        planSchemaVersion === 1
+          ? (({ plan_schema_version: _schema, ...run }) => run)(expectedRun)
+          : expectedRun
+      if (
+        !same(normalizedIdentity, expectedIdentity) ||
+        !same(comparableRun, comparableExpectedRun)
+      ) {
         invariant("repair identity or Run replay command/evidence drifted")
       }
       const physicalActions = (await manager.execute(
-        `select id, run_id, capacity_id, before_granted_quantity,
+        `select id, run_id, capacity_id,
+                before_capacity_version::text as before_capacity_version,
+                before_granted_quantity,
                 before_held_quantity, before_consumed_quantity,
                 before_raw_granted_quantity, before_raw_held_quantity,
                 before_raw_consumed_quantity, expected_granted_quantity,
@@ -588,10 +674,22 @@ export class PostgresCapacityRepairPlanStore
         created_at: iso(row.created_at),
         updated_at: iso(row.updated_at),
       }))
+      if (
+        planSchemaVersion === 1 &&
+        normalizedActions.some((row) => row.before_capacity_version !== null)
+      ) {
+        invariant("schema v1 repair Action unexpectedly carries version evidence")
+      }
+      const comparableActions =
+        planSchemaVersion === 1
+          ? normalizedActions.map(
+              ({ before_capacity_version: _version, ...action }) => action
+            )
+          : normalizedActions
       const expectedActions = [...actions].sort((left, right) =>
         compareRepairPlanKeys(left.capacity_id, right.capacity_id)
       )
-      if (!same(normalizedActions, expectedActions)) {
+      if (!same(comparableActions, expectedActions)) {
         invariant("repair action physical history drifted")
       }
       return this.result("replay", expectedRun, actions)
@@ -599,15 +697,16 @@ export class PostgresCapacityRepairPlanStore
 
     await manager.execute(
       `insert into flash_sale_capacity_repair_run
-        (id, request_identity_digest, command_digest, campaign_id,
+        (id, plan_schema_version, request_identity_digest, command_digest, campaign_id,
          activation_id, control_schema_version, control_root_digest,
          status, classification, actor, reason, ticket, evidence_digest,
          issue_codes, issue_count, issue_manifest, evidence_manifest,
          snapshot_at, finished_at, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?::integer, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
+       values (?, ?, ?, ?, ?, ?, ?::integer, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
                ?, ?::jsonb, ?::jsonb, ?, ?, ?, ?)`,
       [
         expectedRun.id,
+        expectedRun.plan_schema_version,
         expectedRun.request_identity_digest,
         expectedRun.command_digest,
         expectedRun.campaign_id,
@@ -630,10 +729,11 @@ export class PostgresCapacityRepairPlanStore
         auditAt,
       ]
     )
-    for (const action of actions) {
+    for (const action of versionedActions) {
       await manager.execute(
         `insert into flash_sale_capacity_repair_action
-          (id, run_id, capacity_id, before_granted_quantity,
+          (id, run_id, capacity_id, before_capacity_version,
+           before_granted_quantity,
            before_held_quantity, before_consumed_quantity,
            before_raw_granted_quantity, before_raw_held_quantity,
            before_raw_consumed_quantity, expected_granted_quantity,
@@ -641,12 +741,13 @@ export class PostgresCapacityRepairPlanStore
            expected_raw_granted_quantity, expected_raw_held_quantity,
            expected_raw_consumed_quantity, issue_codes, classification,
            evidence_digest, status, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
+         values (?, ?, ?, ?::integer, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
                  ?, ?, ?, ?, ?)`,
         [
           action.id,
           action.run_id,
           action.capacity_id,
+          action.before_capacity_version,
           action.before_granted_quantity,
           action.before_held_quantity,
           action.before_consumed_quantity,
@@ -683,23 +784,26 @@ export class PostgresCapacityRepairPlanStore
         expectedIdentity.updated_at,
       ]
     )
-    return this.result("fresh", expectedRun, actions)
+    return this.result("fresh", expectedRun, versionedActions)
   }
 
   private result(
     disposition: "fresh" | "replay",
     run: Readonly<{
       id: string
+      plan_schema_version: number
       status: DryRunCapacityRepairResult["status"]
       classification: DryRunCapacityRepairResult["classification"]
       evidence_digest: string
       snapshot_at: string
     }>,
-    actions: readonly RepairActionRow[]
+    actions: readonly (RepairActionRow | LegacyRepairActionRow)[]
   ): DryRunCapacityRepairResult {
     const publicActions: CapacityRepairPlanAction[] = actions.map((row) => ({
       id: row.id,
       capacity_id: row.capacity_id,
+      before_capacity_version:
+        "before_capacity_version" in row ? row.before_capacity_version : null,
       before_granted_quantity: row.before_granted_quantity,
       before_held_quantity: row.before_held_quantity,
       before_consumed_quantity: row.before_consumed_quantity,
@@ -714,6 +818,7 @@ export class PostgresCapacityRepairPlanStore
     return {
       disposition,
       run_id: run.id,
+      plan_schema_version: run.plan_schema_version as 1 | 2,
       status: run.status,
       classification: run.classification,
       evidence_digest: run.evidence_digest,

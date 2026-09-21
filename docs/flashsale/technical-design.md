@@ -1467,8 +1467,16 @@ codepoint 排对象 key并保留数组顺序。独立 append-only identity regis
 exact command/evidence 只 replay 原 Run，审计物理行 soft-delete、缺失、额外或字段漂移均 fail closed。
 
 **3c 仍不修改任何业务 Counter 或 Ledger。** manual-required/not-activated 只记录 Run；仅 pure safe drift 生成
-proposed Action。Phase 2A-3d Apply、锁内二次验证、version CAS、审批与回滚仍未完成，scheduled reconcile 仍为
-真正 READ ONLY。
+proposed Action。Phase 2A-3d-1 已冻结 Apply 契约与审计 Schema：历史 Plan 回填为 schema v1 且 Action
+Version 保持 NULL，新 dry-run 生成 schema v2 并从同一 RR 物理扫描固化 Capacity Version；v1 使用独立冻结
+codec exact replay，但不可 Apply。新增无 FK ApplyIdentity、Plan 唯一消费的 ApplyRun 和逐 Capacity 的
+ApplyAction；generated CRUD 全部禁写。审批只能通过可信 `RepairApprovalVerifier`，原始 credential、reference、
+request identity/JTI 不进入 Prepared、数据库或日志；canonical claims 必须绑定 Plan v2、Campaign、Evidence
+和完整有序 Action Set。详见 ADR-0014 与 `runbooks/capacity-repair-apply.md`。
+
+**3d-1 没有 Apply 执行入口。** 锁内二次验证、CLOSED gate、version/before-value CAS、Capacity 原子更新、
+Repair Outbox、exact replay 与回滚属于 3d-2；真实并发/kill/crash 门禁属于 3d-3。scheduled reconcile 仍为
+真正 READ ONLY，不得把审计 Schema 描述成自动修复已经完成。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 
