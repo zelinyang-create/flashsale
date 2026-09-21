@@ -1,0 +1,69 @@
+name: Flash Sale Phase 1 Correctness Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/flashsale-phase-1a
+    paths:
+      - .github/workflows/flash-sale-phase1-gate.yml
+      - docs/flashsale/runbooks/phase1-correctness-gate.md
+      - packages/plugins/flash-sale/package.json
+      - packages/plugins/flash-sale/scripts/run-phase1-gate.js
+      - packages/plugins/flash-sale/full-app-tests/**
+      - packages/plugins/flash-sale/src/**
+      - yarn.lock
+
+permissions:
+  contents: read
+
+jobs:
+  phase1-correctness-gate:
+    name: PostgreSQL multi-process and checkout correctness
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: true
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+    services:
+      postgres:
+        image: postgres:16.15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install workspace dependencies
+        uses: ./.github/actions/cache-deps
+        with:
+          extension: flash-sale-phase1-gate
+
+      - name: Run Phase 1 correctness gate
+        run: corepack yarn workspace @medusajs/flash-sale-plugin test:phase1:gate
+
+      - name: Upload correctness evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flash-sale-phase1-correctness-gate
+          path: packages/plugins/flash-sale/artifacts/phase1/
+          if-no-files-found: error
+          retention-days: 30

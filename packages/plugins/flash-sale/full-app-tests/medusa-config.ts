@@ -1,6 +1,14 @@
 import { defineConfig, Modules } from "@medusajs/framework/utils"
 import path from "node:path"
 
+const databaseHost = process.env.DB_HOST ?? "localhost"
+const databasePort = process.env.DB_PORT ?? "5432"
+const databaseUsername = process.env.DB_USERNAME ?? "postgres"
+const databasePassword = process.env.DB_PASSWORD ?? "postgres"
+const databaseCredentials = `${encodeURIComponent(databaseUsername)}${
+  databasePassword ? `:${encodeURIComponent(databasePassword)}` : ""
+}`
+
 const systemTaxProvider = {
   resolve: {
     services: [require("@medusajs/tax/dist/providers/system").default],
@@ -18,8 +26,7 @@ const systemPaymentProvider = {
 module.exports = defineConfig({
   admin: { disable: true },
   projectConfig: {
-    databaseUrl:
-      "postgres://postgres:postgres@localhost/medusa-flash-sale-full-app",
+    databaseUrl: `postgres://${databaseCredentials}@${databaseHost}:${databasePort}/medusa-flash-sale-full-app`,
     http: {
       jwtSecret: "test",
       cookieSecret: "test",

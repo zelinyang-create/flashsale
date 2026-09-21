@@ -8,6 +8,7 @@ yarn-error.log
 .idea
 
 coverage
+artifacts/
 
 !src/**
 

@@ -1,9 +1,11 @@
 import { createHash } from "crypto"
+import { mkdir, open, rename, rm } from "fs/promises"
 import { moduleIntegrationTestRunner } from "@medusajs/test-utils"
 import * as path from "path"
 import {
   AllocationCommandErrorCode,
   ClaimAndHoldQuotaCommand,
+  ReconcileAllocationResult,
 } from "../application"
 import {
   AllocationPolicyState,
@@ -43,9 +45,73 @@ type InvariantSnapshot = {
   subject_held_mismatch: number
   subject_consumed_mismatch: number
 }
+type AllocationTotals = {
+  attempts: number
+  holds: number
+  capacity_held: number
+  capacity_consumed: number
+}
+type GateDatabaseSnapshot = AllocationTotals & {
+  held_attempts: number
+  rejected_attempts: number
+  distinct_business_identities: number
+  duplicate_business_identities: number
+}
+type SerializedReconciliation = {
+  snapshot_at: string
+  healthy: boolean
+  skipped: boolean
+  skip_reason: string | null
+  issue_count: number
+  counts: Readonly<Record<string, number>>
+  samples: readonly unknown[]
+}
+type GateScenarioEvidence = {
+  campaign_id: string
+  elapsed_ms: number
+  held: number
+  rejected: number
+  unexpected: number
+  replayed: number
+  database: GateDatabaseSnapshot
+  invariants: InvariantSnapshot
+  reconciliation: SerializedReconciliation
+}
+type GateRoundEvidence = {
+  round: number
+  elapsed_ms: number
+  quota: GateScenarioEvidence
+  same_key: GateScenarioEvidence
+  reconciliations: Readonly<Record<string, SerializedReconciliation>>
+}
 
 const digest = (value: string) =>
   createHash("sha256").update(value).digest("hex")
+
+const elapsedMilliseconds = (startedAt: bigint) =>
+  Number(process.hrtime.bigint() - startedAt) / 1_000_000
+
+async function writeJsonAtomically(targetPath: string, value: unknown) {
+  const resolvedTarget = path.resolve(targetPath)
+  const directory = path.dirname(resolvedTarget)
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(resolvedTarget)}.${process.pid}.${Date.now()}.tmp`
+  )
+  await mkdir(directory, { recursive: true })
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(temporaryPath, "wx")
+    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8")
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await rename(temporaryPath, resolvedTarget)
+  } finally {
+    await handle?.close().catch(() => undefined)
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+  }
+}
 
 moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleName: FlashSalePluginModule.ALLOCATION,
@@ -189,6 +255,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           subject_consumed_mismatch: 0,
         },
       ])
+      return rows[0]
     }
 
     async function allocationTotals(campaignId: string) {
@@ -208,12 +275,82 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
              join flash_sale_allocation_policy p on p.id = c.allocation_policy_id
             where p.campaign_id = ?)::int as capacity_consumed`,
         [campaignId, campaignId, campaignId, campaignId]
-      )) as Array<{
-        attempts: number
-        holds: number
-        capacity_held: number
-        capacity_consumed: number
-      }>
+      )) as AllocationTotals[]
+    }
+
+    async function gateDatabaseSnapshot(
+      campaignId: string
+    ): Promise<GateDatabaseSnapshot> {
+      const rows = (await execute(
+        `select
+          (select count(*) from flash_sale_purchase_attempt
+            where campaign_id = ?)::int as attempts,
+          (select count(*) from flash_sale_allocation_hold h
+            join flash_sale_purchase_attempt a on a.id = h.attempt_id
+            where a.campaign_id = ?)::int as holds,
+          (select count(*) from flash_sale_purchase_attempt
+            where campaign_id = ? and state = 'quota_held')::int
+            as held_attempts,
+          (select count(*) from flash_sale_purchase_attempt
+            where campaign_id = ? and state = 'quota_rejected')::int
+            as rejected_attempts,
+          (select coalesce(sum(c.held_quantity), 0)
+             from flash_sale_capacity c
+             join flash_sale_allocation_policy p on p.id = c.allocation_policy_id
+            where p.campaign_id = ?)::int as capacity_held,
+          (select coalesce(sum(c.consumed_quantity), 0)
+             from flash_sale_capacity c
+             join flash_sale_allocation_policy p on p.id = c.allocation_policy_id
+            where p.campaign_id = ?)::int as capacity_consumed,
+          (select count(distinct (subject_id, idempotency_key_hash))
+             from flash_sale_purchase_attempt where campaign_id = ?)::int
+            as distinct_business_identities,
+          (select count(*) from (
+             select subject_id, idempotency_key_hash
+               from flash_sale_purchase_attempt where campaign_id = ?
+              group by subject_id, idempotency_key_hash having count(*) > 1
+           ) duplicate_identity)::int as duplicate_business_identities`,
+        [
+          campaignId,
+          campaignId,
+          campaignId,
+          campaignId,
+          campaignId,
+          campaignId,
+          campaignId,
+          campaignId,
+        ]
+      )) as GateDatabaseSnapshot[]
+      if (rows.length !== 1) {
+        throw new Error(
+          `Expected one database snapshot for campaign ${campaignId}`
+        )
+      }
+      return rows[0]
+    }
+
+    async function reconcileCampaign(
+      campaignId: string
+    ): Promise<SerializedReconciliation> {
+      const result: ReconcileAllocationResult =
+        await service.reconcileAllocation({
+          campaign_id: campaignId,
+          sample_limit: 100,
+        })
+      expect(result).toMatchObject({
+        healthy: true,
+        skipped: false,
+        issue_count: 0,
+      })
+      return {
+        snapshot_at: result.snapshot_at.toISOString(),
+        healthy: result.healthy,
+        skipped: result.skipped,
+        skip_reason: result.skip_reason,
+        issue_count: result.issue_count,
+        counts: result.counts,
+        samples: result.samples,
+      }
     }
 
     const fulfilled = (result: MultiprocessResult) =>
@@ -234,6 +371,11 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     }
 
     it(`preserves allocation invariants across ${workerCount} Node processes for ${rounds} round(s)`, async () => {
+      const gateStartedAt = process.hrtime.bigint()
+      const roundEvidence: GateRoundEvidence[] = []
+      const [{ server_version: postgresVersion }] = (await execute(
+        "show server_version"
+      )) as Array<{ server_version: string }>
       const fleet = await AllocationWorkerFleet.create(
         dbConfig.clientUrl,
         dbConfig.schema ?? "public",
@@ -241,7 +383,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       )
       try {
         for (let round = 1; round <= rounds; round++) {
+          const roundStartedAt = process.hrtime.bigint()
+          const reconciliations: Record<string, SerializedReconciliation> = {}
           const quota = await seed(`${round}-quota`, 50, 1)
+          const quotaStartedAt = process.hrtime.bigint()
           const quotaResults = await fleet.execute(
             claimOperations(
               Array.from({ length: 500 }, (_, index) =>
@@ -253,25 +398,53 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               )
             )
           )
-          expect(
-            quotaResults.filter(
-              (result) =>
-                result.outcome === "fulfilled" && result.status === "held"
-            )
-          ).toHaveLength(50)
-          expect(
-            quotaResults.filter(
-              (result) =>
-                result.outcome === "fulfilled" &&
-                result.status === "rejected" &&
-                result.error_code ===
-                  AllocationCommandErrorCode.CAPACITY_EXHAUSTED
-            )
-          ).toHaveLength(450)
+          const quotaHeld = quotaResults.filter(
+            (result) =>
+              result.outcome === "fulfilled" && result.status === "held"
+          ).length
+          const quotaRejected = quotaResults.filter(
+            (result) =>
+              result.outcome === "fulfilled" &&
+              result.status === "rejected" &&
+              result.error_code ===
+                AllocationCommandErrorCode.CAPACITY_EXHAUSTED
+          ).length
+          const quotaUnexpected =
+            quotaResults.length - quotaHeld - quotaRejected
+          expect(quotaHeld).toBe(50)
+          expect(quotaRejected).toBe(450)
+          expect(quotaUnexpected).toBe(0)
           expectAllFulfilled(quotaResults, `round ${round} quota 50/500`)
-          await invariantSnapshot(quota.campaignId)
+          const quotaInvariants = await invariantSnapshot(quota.campaignId)
+          const quotaDatabase = await gateDatabaseSnapshot(quota.campaignId)
+          expect(quotaDatabase).toEqual({
+            attempts: 500,
+            holds: 50,
+            held_attempts: 50,
+            rejected_attempts: 450,
+            capacity_held: 50,
+            capacity_consumed: 0,
+            distinct_business_identities: 500,
+            duplicate_business_identities: 0,
+          })
+          const quotaReconciliation = await reconcileCampaign(quota.campaignId)
+          reconciliations.quota = quotaReconciliation
+          const quotaEvidence: GateScenarioEvidence = {
+            campaign_id: quota.campaignId,
+            elapsed_ms: elapsedMilliseconds(quotaStartedAt),
+            held: quotaHeld,
+            rejected: quotaRejected,
+            unexpected: quotaUnexpected,
+            replayed: quotaResults.filter(
+              (result) => result.outcome === "fulfilled" && result.replayed
+            ).length,
+            database: quotaDatabase,
+            invariants: quotaInvariants,
+            reconciliation: quotaReconciliation,
+          }
 
           const sameKey = await seed(`${round}-same-key`, 20, 1)
+          const sameKeyStartedAt = process.hrtime.bigint()
           const sameCommand = command(
             sameKey.campaignId,
             "same-key-subject",
@@ -294,7 +467,48 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
                 result.outcome === "fulfilled" && result.replayed === false
             )
           ).toHaveLength(1)
-          await invariantSnapshot(sameKey.campaignId)
+          const sameKeyInvariants = await invariantSnapshot(sameKey.campaignId)
+          const sameKeyDatabase = await gateDatabaseSnapshot(sameKey.campaignId)
+          expect(sameKeyDatabase).toEqual({
+            attempts: 1,
+            holds: 1,
+            held_attempts: 1,
+            rejected_attempts: 0,
+            capacity_held: 1,
+            capacity_consumed: 0,
+            distinct_business_identities: 1,
+            duplicate_business_identities: 0,
+          })
+          const sameKeyReconciliation = await reconcileCampaign(
+            sameKey.campaignId
+          )
+          reconciliations.same_key = sameKeyReconciliation
+          const sameKeyHeld = sameResults.filter(
+            (result) =>
+              result.outcome === "fulfilled" && result.status === "held"
+          ).length
+          const sameKeyRejected = sameResults.filter(
+            (result) =>
+              result.outcome === "fulfilled" && result.status === "rejected"
+          ).length
+          const sameKeyUnexpected =
+            sameResults.length - sameKeyHeld - sameKeyRejected
+          expect(sameKeyHeld).toBe(20)
+          expect(sameKeyRejected).toBe(0)
+          expect(sameKeyUnexpected).toBe(0)
+          const sameKeyEvidence: GateScenarioEvidence = {
+            campaign_id: sameKey.campaignId,
+            elapsed_ms: elapsedMilliseconds(sameKeyStartedAt),
+            held: sameKeyHeld,
+            rejected: sameKeyRejected,
+            unexpected: sameKeyUnexpected,
+            replayed: sameResults.filter(
+              (result) => result.outcome === "fulfilled" && result.replayed
+            ).length,
+            database: sameKeyDatabase,
+            invariants: sameKeyInvariants,
+            reconciliation: sameKeyReconciliation,
+          }
 
           const subjectLimit = await seed(`${round}-subject-limit`, 20, 1)
           const subjectResults = await fleet.execute(
@@ -325,6 +539,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             )
           ).toHaveLength(19)
           await invariantSnapshot(subjectLimit.campaignId)
+          reconciliations.subject_limit = await reconcileCampaign(
+            subjectLimit.campaignId
+          )
 
           const settlement = await seed(`${round}-settlement`, 1, 1)
           const held = await fleet.execute(
@@ -391,6 +608,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             )
           ).toHaveLength(19)
           await invariantSnapshot(settlement.campaignId)
+          reconciliations.settlement = await reconcileCampaign(
+            settlement.campaignId
+          )
 
           if (fullRun) {
             const conflicting = await seed(`${round}-different-request`, 10, 2)
@@ -442,6 +662,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             })
             expect([1, 2]).toContain(conflictTotals.capacity_held)
             await invariantSnapshot(conflicting.campaignId)
+            reconciliations.different_request = await reconcileCampaign(
+              conflicting.campaignId
+            )
 
             const multiItem = await seedItems(
               `${round}-multi-item`,
@@ -476,6 +699,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               },
             ])
             await invariantSnapshot(multiItem.campaignId)
+            reconciliations.multi_item = await reconcileCampaign(
+              multiItem.campaignId
+            )
 
             const reverseOrder = await seedItems(
               `${round}-reverse-order`,
@@ -527,6 +753,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               )
             ).toHaveLength(1)
             await invariantSnapshot(reverseOrder.campaignId)
+            reconciliations.reverse_order = await reconcileCampaign(
+              reverseOrder.campaignId
+            )
 
             const consumeReplay = await seed(`${round}-consume-replay`, 1, 1)
             const [consumeHeld] = await fleet.execute(
@@ -579,6 +808,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               )
             ).toBe(true)
             await invariantSnapshot(consumeReplay.campaignId)
+            reconciliations.consume_replay = await reconcileCampaign(
+              consumeReplay.campaignId
+            )
 
             const releaseReplay = await seed(`${round}-release-replay`, 1, 1)
             const [releaseHeld] = await fleet.execute(
@@ -631,6 +863,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               )
             ).toBe(true)
             await invariantSnapshot(releaseReplay.campaignId)
+            reconciliations.release_replay = await reconcileCampaign(
+              releaseReplay.campaignId
+            )
 
             const expiryCount = fullRun ? 80 : 20
             const expiry = await seed(`${round}-expiry-workers`, expiryCount, 1)
@@ -651,18 +886,19 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
                   result.outcome === "fulfilled" && result.status === "held"
               )
             ).toBe(true)
+            const expiredAt = new Date(Date.now() - 1_000)
             await execute(
               `update flash_sale_purchase_attempt
-                  set expires_at = now() - interval '1 second'
+                  set expires_at = ?
                 where campaign_id = ?`,
-              [expiry.campaignId]
+              [expiredAt, expiry.campaignId]
             )
             await execute(
               `update flash_sale_allocation_hold h
-                  set expires_at = now() - interval '1 second'
+                  set expires_at = ?
                  from flash_sale_purchase_attempt a
                 where h.attempt_id = a.id and a.campaign_id = ?`,
-              [expiry.campaignId]
+              [expiredAt, expiry.campaignId]
             )
             const expiryResults = await fleet.execute(
               Array.from(
@@ -714,7 +950,80 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
               { state: PurchaseAttemptState.QUOTA_EXPIRED, count: expiryCount },
             ])
             await invariantSnapshot(expiry.campaignId)
+            reconciliations.expiry_workers = await reconcileCampaign(
+              expiry.campaignId
+            )
           }
+
+          roundEvidence.push({
+            round,
+            elapsed_ms: elapsedMilliseconds(roundStartedAt),
+            quota: quotaEvidence,
+            same_key: sameKeyEvidence,
+            reconciliations,
+          })
+        }
+
+        const candidatePath =
+          process.env.FLASH_SALE_PHASE1_CANDIDATE_PATH?.trim()
+        if (candidatePath) {
+          await writeJsonAtomically(candidatePath, {
+            schema: "flash-sale.phase1-allocation-candidate.v1",
+            gate: "allocation",
+            passed: true,
+            kind: "multiprocess-database-correctness-gate",
+            description:
+              "Database-backed correctness evidence; this is not an HTTP throughput benchmark.",
+            generated_at: new Date().toISOString(),
+            postgres: postgresVersion,
+            configuration: {
+              mode: fullRun ? "full" : "quick-smoke",
+              workers: workerCount,
+              rounds,
+              quota: 50,
+              concurrency: 500,
+              submitted_attempts_per_round: 500,
+              db_pool_max_per_worker: 8,
+              transport: "child_process_stdio",
+              invocation: "direct_handler",
+              timing_not_for_throughput: true,
+            },
+            elapsed_ms: elapsedMilliseconds(gateStartedAt),
+            rounds: roundEvidence,
+            summary: {
+              passed: true,
+              completed_rounds: roundEvidence.length,
+              quota_total_held: roundEvidence.reduce(
+                (sum, evidence) => sum + evidence.quota.held,
+                0
+              ),
+              quota_total_rejected: roundEvidence.reduce(
+                (sum, evidence) => sum + evidence.quota.rejected,
+                0
+              ),
+              quota_total_unexpected: roundEvidence.reduce(
+                (sum, evidence) => sum + evidence.quota.unexpected,
+                0
+              ),
+              duplicate_business_identities: roundEvidence.reduce(
+                (sum, evidence) =>
+                  sum +
+                  evidence.quota.database.duplicate_business_identities +
+                  evidence.same_key.database.duplicate_business_identities,
+                0
+              ),
+              reconciliation_issue_count: roundEvidence.reduce(
+                (sum, evidence) =>
+                  sum +
+                  Object.values(evidence.reconciliations).reduce(
+                    (roundSum, reconciliation) =>
+                      roundSum + reconciliation.issue_count,
+                    0
+                  ),
+                0
+              ),
+            },
+          })
         }
       } finally {
         await fleet.close()
@@ -886,9 +1195,11 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             },
           },
         ])
-        expect(stale.map((result) =>
-          result.outcome === "fulfilled" ? result.disposition : result.outcome
-        )).toEqual(["fenced", "fenced"])
+        expect(
+          stale.map((result) =>
+            result.outcome === "fulfilled" ? result.disposition : result.outcome
+          )
+        ).toEqual(["fenced", "fenced"])
 
         const finalized = await takeoverFleet.executeOn(1, [
           {
