@@ -37,6 +37,15 @@ import {
   appendAllocationOutboxEvent,
   verifyAllocationOutboxReplay,
 } from "./allocation-outbox-producer"
+import {
+  appendProvisionedCapacityCheckpoints,
+  appendCapacityMovements,
+  currentMovementActivationId,
+  lockAllocationMovementWriter,
+  lockMovementLedgerForCapacityProvision,
+  verifyCapacityMovementHistory,
+  verifyProvisionedCapacityCheckpoints,
+} from "./capacity-movement-producer"
 
 type PolicyRow = {
   id: string
@@ -82,6 +91,8 @@ type AttemptRow = {
   terminal_at: Date | string | null
   settlement_id: string | null
   settlement_started_at: Date | string | null
+  hold_movement_activation_id: string | null
+  terminal_movement_activation_id: string | null
   created_at: Date | string
   updated_at: Date | string
   deleted_at: Date | string | null
@@ -127,7 +138,8 @@ type HoldRow = {
 const ATTEMPT_COLUMNS = `id, allocation_policy_id, campaign_id, subject_id,
   cart_id, idempotency_key_hash, request_hash, state, rules_version, expires_at,
   version, last_error_code, terminal_at, settlement_id,
-  settlement_started_at, created_at, updated_at, deleted_at`
+  settlement_started_at, hold_movement_activation_id,
+  terminal_movement_activation_id, created_at, updated_at, deleted_at`
 const HOLD_COLUMNS = `id, attempt_id, capacity_id, campaign_item_id, quantity,
   state, expires_at, version, resolved_at, created_at, updated_at, deleted_at`
 const POLICY_COLUMNS = `id, campaign_id, rules_version, configuration_hash,
@@ -260,19 +272,19 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   ) {}
 
   async claimAttempt(input: ClaimAttemptPersistenceInput) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.claimInTransaction(manager, input)
     )
   }
 
   async holdQuota(input: HoldQuotaPersistenceInput) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.holdInTransaction(manager, input)
     )
   }
 
   async claimAndHoldQuota(input: ClaimAttemptPersistenceInput) {
-    return await this.runTransaction(async (manager) => {
+    return await this.runMovementWriterTransaction(async (manager) => {
       const claim = await this.claimInTransaction(manager, input)
       return await this.holdInTransaction(manager, {
         attempt_id: claim.attempt.id,
@@ -287,13 +299,13 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async cancelHeldQuota(input: CancelHeldQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.settleInTransaction(manager, input.attempt_id, "cancel")
     )
   }
 
   async beginQuotaSettlement(input: SettlementQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.beginSettlementInTransaction(
         manager,
         input.attempt_id,
@@ -303,7 +315,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async consumeQuotaSettlement(input: SettlementQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.settleInTransaction(
         manager,
         input.attempt_id,
@@ -314,7 +326,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async authorizeQuotaSettlement(input: SettlementQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.authorizeSettlementInTransaction(
         manager,
         input.attempt_id,
@@ -324,7 +336,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async releaseQuotaSettlement(input: SettlementQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.settleInTransaction(
         manager,
         input.attempt_id,
@@ -335,7 +347,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async expireQuota(input: ExpireQuotaCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.settleInTransaction(manager, input.attempt_id, "expire")
     )
   }
@@ -391,6 +403,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
                 "set local transaction isolation level read committed"
               )
               await manager.execute("set local lock_timeout = '3s'")
+              await lockAllocationMovementWriter(manager)
 
               let candidate: { id: string } | undefined
               if (candidateId) {
@@ -486,19 +499,19 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   }
 
   async provisionAllocation(input: ProvisionAllocationPersistenceInput) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.provisionInTransaction(manager, input)
     )
   }
 
   async openAllocation(input: TransitionAllocationCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.transitionAllocationInTransaction(manager, input, "open")
     )
   }
 
   async closeAllocation(input: TransitionAllocationCommand) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.transitionAllocationInTransaction(manager, input, "close")
     )
   }
@@ -506,7 +519,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
   async fenceAndCloseCampaignAllocation(
     input: FenceAndCloseCampaignAllocationCommand
   ) {
-    return await this.runTransaction((manager) =>
+    return await this.runMovementWriterTransaction((manager) =>
       this.fenceAndCloseCampaignInTransaction(manager, input)
     )
   }
@@ -547,6 +560,17 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     )
   }
 
+  private async runMovementWriterTransaction<T>(
+    operation: (manager: SqlEntityManager) => Promise<T>
+  ): Promise<T> {
+    return await this.runTransaction(async (manager) => {
+      // This must be the first application lock in the transaction. Activation
+      // takes the exclusive form before locking Capacity rows.
+      await lockAllocationMovementWriter(manager)
+      return await operation(manager)
+    })
+  }
+
   private async databaseNow(manager: SqlEntityManager): Promise<Date> {
     const rows = (await manager.execute(
       "select clock_timestamp() as fresh_now"
@@ -585,13 +609,21 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
             "The campaign rules version already has a different snapshot"
           )
         }
-        return {
+        const replay = {
           policy: mapPolicy(latest),
           capacities: await this.lockPolicyCapacities(manager, latest.id),
           replayed: true,
         }
+        await verifyProvisionedCapacityCheckpoints(manager, replay.capacities)
+        return replay
       }
     }
+
+    // Low-frequency provisioning serializes on the Control row and rolls the
+    // checkpoint digest root after adding opening checkpoints. Hot-path
+    // movement writers never update this root.
+    const movementControl =
+      await lockMovementLedgerForCapacityProvision(manager)
 
     const activePolicies = (await manager.execute(
       `select ${POLICY_COLUMNS}
@@ -639,7 +671,13 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       await this.closeLockedPolicy(manager, active, capacities)
     }
 
-    return await this.insertProvisionedAllocation(manager, input)
+    const provisioned = await this.insertProvisionedAllocation(manager, input)
+    await appendProvisionedCapacityCheckpoints(
+      manager,
+      movementControl,
+      provisioned.capacities
+    )
+    return provisioned
   }
 
   private async insertProvisionedAllocation(
@@ -1126,8 +1164,12 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       )
     }
     this.assertAttemptIdentity(attempt, input)
+    if (attempt.state === PurchaseAttemptState.PENDING) {
+      await verifyCapacityMovementHistory(manager, mapAttempt(attempt), [])
+    }
     if (attempt.state === PurchaseAttemptState.QUOTA_HELD) {
       const holds = await this.lockHolds(manager, attempt.id)
+      await verifyCapacityMovementHistory(manager, mapAttempt(attempt), holds)
       await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
       return {
         status: "held",
@@ -1137,6 +1179,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       }
     }
     if (attempt.state === PurchaseAttemptState.QUOTA_REJECTED) {
+      await verifyCapacityMovementHistory(manager, mapAttempt(attempt), [])
       await verifyAllocationOutboxReplay(
         manager,
         mapAttempt(attempt),
@@ -1358,9 +1401,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       const inserted = (await manager.execute(
         `insert into flash_sale_allocation_hold
           (id, attempt_id, capacity_id, campaign_item_id, quantity, state,
-           expires_at, version, raw_quantity)
+           expires_at, version, raw_quantity, created_at, updated_at)
          values (?, ?, ?, ?, ?, ?, ?, 1,
-                 jsonb_build_object('value', ?::text, 'precision', 20))
+                 jsonb_build_object('value', ?::text, 'precision', 20),
+                 clock_timestamp(), clock_timestamp())
          returning ${HOLD_COLUMNS}`,
         [
           generateEntityId(undefined, "fsahold"),
@@ -1375,13 +1419,16 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       )) as HoldRow[]
       holds.push(mapHold(inserted[0]))
     }
+    const movementActivationId = await currentMovementActivationId(manager)
     const attemptUpdates = (await manager.execute(
       `update flash_sale_purchase_attempt
-          set state = ?, version = version + 1, updated_at = now()
+          set state = ?, hold_movement_activation_id = ?,
+              version = version + 1, updated_at = clock_timestamp()
         where id = ? and state = ? and version = ?
         returning ${ATTEMPT_COLUMNS}`,
       [
         PurchaseAttemptState.QUOTA_HELD,
+        movementActivationId,
         attempt.id,
         PurchaseAttemptState.PENDING,
         Number(attempt.version),
@@ -1391,6 +1438,12 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       throw this.invariant("Purchase attempt CAS failed while locked")
     }
     const updatedAttempt = mapAttempt(attemptUpdates[0])
+    await appendCapacityMovements(manager, updatedAttempt, holds, "hold", () =>
+      this.faultInjector?.hit(
+        "after_first_capacity_movement_append",
+        updatedAttempt.id
+      )
+    )
     await this.appendTransitionOutbox(manager, updatedAttempt, holds)
     return {
       status: "held",
@@ -1434,8 +1487,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     ) {
       throw this.invariant("Committing purchase attempt must have held quota")
     }
-    await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
-    return { attempt: mapAttempt(attempt), holds, replayed: true }
+    const mappedAttempt = mapAttempt(attempt)
+    await verifyCapacityMovementHistory(manager, mappedAttempt, holds)
+    await verifyAllocationOutboxReplay(manager, mappedAttempt, holds)
+    return { attempt: mappedAttempt, holds, replayed: true }
   }
 
   private async beginSettlementInTransaction(
@@ -1470,8 +1525,10 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       ) {
         throw this.invariant("Committing purchase attempt must have held quota")
       }
-      await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
-      return { attempt: mapAttempt(attempt), holds, replayed: true }
+      const mappedAttempt = mapAttempt(attempt)
+      await verifyCapacityMovementHistory(manager, mappedAttempt, holds)
+      await verifyAllocationOutboxReplay(manager, mappedAttempt, holds)
+      return { attempt: mappedAttempt, holds, replayed: true }
     }
     if (attempt.state !== PurchaseAttemptState.QUOTA_HELD) {
       throw new AllocationCommandError(
@@ -1486,6 +1543,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
     ) {
       throw this.invariant("Held purchase attempt must have held quota")
     }
+    await verifyCapacityMovementHistory(manager, mapAttempt(attempt), holds)
     const now = await this.databaseNow(manager)
     if (asDate(attempt.expires_at).getTime() <= now.getTime()) {
       throw new AllocationCommandError(
@@ -1620,12 +1678,14 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       throw this.invariant("Settlement hold or capacity identity set changed")
     }
 
+    const mappedAttempt = mapAttempt(attempt)
+    await verifyCapacityMovementHistory(manager, mappedAttempt, holds)
     if (attempt.state === targetAttemptState) {
       if (holds.some((hold) => hold.state !== targetHoldState)) {
         throw this.invariant("Terminal attempt and hold states disagree")
       }
-      await verifyAllocationOutboxReplay(manager, mapAttempt(attempt), holds)
-      return { attempt: mapAttempt(attempt), holds, replayed: true }
+      await verifyAllocationOutboxReplay(manager, mappedAttempt, holds)
+      return { attempt: mappedAttempt, holds, replayed: true }
     }
     const settledAt = await this.databaseNow(manager)
     const expired = asDate(attempt.expires_at).getTime() <= settledAt.getTime()
@@ -1780,15 +1840,18 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       resolvedHolds.push(mapHold(rows[0]))
     }
 
+    const movementActivationId = await currentMovementActivationId(manager)
     const settledAttempts = (await manager.execute(
       `update flash_sale_purchase_attempt
           set state = ?, terminal_at = ?::timestamptz,
+              terminal_movement_activation_id = ?,
               version = version + 1, updated_at = ?::timestamptz
         where id = ? and state = ? and version = ?
         returning ${ATTEMPT_COLUMNS}`,
       [
         targetAttemptState,
         settledAt,
+        movementActivationId,
         settledAt,
         attempt.id,
         expectedSourceState,
@@ -1801,6 +1864,17 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       )
     }
     const settledAttempt = mapAttempt(settledAttempts[0])
+    await appendCapacityMovements(
+      manager,
+      settledAttempt,
+      resolvedHolds,
+      disposition === "cancel" ? "release" : disposition,
+      () =>
+        this.faultInjector?.hit(
+          "after_first_capacity_movement_append",
+          settledAttempt.id
+        )
+    )
     await this.appendTransitionOutbox(manager, settledAttempt, resolvedHolds)
     return {
       attempt: settledAttempt,
@@ -1846,6 +1920,7 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       quantity: number
     }>[]
   ): Promise<HoldQuotaResult> {
+    await verifyCapacityMovementHistory(manager, mapAttempt(attempt), [])
     const rows = (await manager.execute(
       `update flash_sale_purchase_attempt
           set state = ?, last_error_code = ?, terminal_at = now(),
@@ -1937,8 +2012,9 @@ export class PostgresAllocationAttemptStore implements AllocationStore {
       )
     }
     const attempt = mapAttempt(existing)
+    const holds = await this.lockHolds(manager, attempt.id)
+    await verifyCapacityMovementHistory(manager, attempt, holds)
     if (attempt.state !== PurchaseAttemptState.PENDING) {
-      const holds = await this.lockHolds(manager, attempt.id)
       await verifyAllocationOutboxReplay(
         manager,
         attempt,
@@ -1961,6 +2037,7 @@ export interface AllocationFaultInjector {
   hit(
     name:
       | "during_expiry_release"
+      | "after_first_capacity_movement_append"
       | "after_domain_transition_before_outbox"
       | "after_outbox_append_before_commit",
     attemptId: string

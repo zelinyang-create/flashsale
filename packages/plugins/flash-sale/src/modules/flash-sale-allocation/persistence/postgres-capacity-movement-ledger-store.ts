@@ -1,7 +1,7 @@
-import { createHash } from "crypto"
 import { SqlEntityManager } from "@medusajs/framework/mikro-orm/postgresql"
 import { DAL } from "@medusajs/framework/types"
 import { generateEntityId } from "@medusajs/framework/utils"
+import { CapacityMovementCheckpointKind } from "../../../types"
 import {
   ActivateAllocationMovementLedgerCommand,
   ActivateAllocationMovementLedgerResult,
@@ -9,10 +9,17 @@ import {
   AllocationCommandErrorCode,
   AllocationMovementLedgerStore,
 } from "../application"
+import {
+  ALLOCATION_MOVEMENT_LEDGER_CONTROL_ID as CONTROL_ID,
+  ALLOCATION_MOVEMENT_LEDGER_LOCK as ACTIVATION_LOCK,
+  ALLOCATION_MOVEMENT_LEDGER_CURRENT_SCHEMA_VERSION as SCHEMA_VERSION,
+  MovementCheckpointRow as CheckpointRow,
+  MovementControlRow as ControlRow,
+  assertPhysicalCheckpointCapacityCoverage,
+  assertMovementCheckpointRows,
+  calculateMovementCheckpointDigest,
+} from "./capacity-movement-producer"
 
-const CONTROL_ID = "allocation-movement-ledger"
-const SCHEMA_VERSION = 1 as const
-const ACTIVATION_LOCK = "flash-sale-allocation-movement-ledger-activation"
 const SHA256 = /^[0-9a-f]{64}$/
 
 type CapacityBaselineRow = {
@@ -35,34 +42,6 @@ type CapacityBaselineRow = {
   invalid_hold_count: number | string
 }
 
-type ControlRow = {
-  id: string
-  activation_id: string
-  required_after: Date | string
-  schema_version: number | string
-  checkpoint_digest: string
-  deleted_at: Date | string | null
-}
-
-type CheckpointRow = {
-  id: string
-  activation_id: string
-  capacity_id: string
-  campaign_item_id: string
-  shard_no: number | string
-  opening_granted_quantity: number | string
-  opening_available_quantity: number | string
-  opening_held_quantity: number | string
-  opening_consumed_quantity: number | string
-  capacity_version: number | string
-  activated_at: Date | string
-  raw_opening_granted_quantity: string
-  raw_opening_available_quantity: string
-  raw_opening_held_quantity: string
-  raw_opening_consumed_quantity: string
-  deleted_at: Date | string | null
-}
-
 type PhysicalCounts = {
   movements: number | string
   checkpoints: number | string
@@ -77,44 +56,6 @@ const canonicalInteger = (value: number | string): string => {
   } catch {
     return "invalid"
   }
-}
-
-const canonicalRaw = (value: string): string => {
-  try {
-    return JSON.stringify(JSON.parse(value) as unknown)
-  } catch {
-    return "invalid"
-  }
-}
-
-/** Hashes every immutable checkpoint field in an explicit, stable order. */
-const checkpointDigest = (rows: CheckpointRow[]): string => {
-  const tuples = [...rows]
-    .sort((left, right) =>
-      `${left.capacity_id}\u0000${left.id}`.localeCompare(
-        `${right.capacity_id}\u0000${right.id}`
-      )
-    )
-    .map((row) => [
-      row.id,
-      row.activation_id,
-      row.capacity_id,
-      row.campaign_item_id,
-      canonicalInteger(row.shard_no),
-      canonicalInteger(row.opening_granted_quantity),
-      canonicalInteger(row.opening_available_quantity),
-      canonicalInteger(row.opening_held_quantity),
-      canonicalInteger(row.opening_consumed_quantity),
-      canonicalInteger(row.capacity_version),
-      asDate(row.activated_at).toISOString(),
-      canonicalRaw(row.raw_opening_granted_quantity),
-      canonicalRaw(row.raw_opening_available_quantity),
-      canonicalRaw(row.raw_opening_held_quantity),
-      canonicalRaw(row.raw_opening_consumed_quantity),
-    ])
-  return createHash("sha256")
-    .update(JSON.stringify(tuples), "utf8")
-    .digest("hex")
 }
 
 export class PostgresCapacityMovementLedgerStore
@@ -222,13 +163,13 @@ export class PostgresCapacityMovementLedgerStore
         ).toString(10)
         await manager.execute(
           `insert into flash_sale_capacity_movement_checkpoint
-            (id, activation_id, capacity_id, campaign_item_id, shard_no,
+            (id, activation_id, capacity_id, campaign_item_id, checkpoint_kind, shard_no,
              opening_granted_quantity, opening_available_quantity,
              opening_held_quantity, opening_consumed_quantity,
              capacity_version, activated_at, raw_opening_granted_quantity,
              raw_opening_available_quantity, raw_opening_held_quantity,
              raw_opening_consumed_quantity)
-           values (?, ?, ?, ?, ?, ?::numeric, ?::numeric, ?::numeric,
+           values (?, ?, ?, ?, ?, ?, ?::numeric, ?::numeric, ?::numeric,
                    ?::numeric, ?, ?::timestamptz,
                    jsonb_build_object('value', ?, 'precision', 20),
                    jsonb_build_object('value', ?, 'precision', 20),
@@ -239,6 +180,7 @@ export class PostgresCapacityMovementLedgerStore
             activationId,
             capacity.id,
             capacity.campaign_item_id,
+            CapacityMovementCheckpointKind.CUTOVER,
             Number(capacity.shard_no),
             granted,
             available,
@@ -255,8 +197,16 @@ export class PostgresCapacityMovementLedgerStore
       }
 
       const checkpoints = await this.loadPhysicalCheckpoints(manager)
-      this.assertCheckpointSet(checkpoints, activationId, activatedAt)
-      const digest = checkpointDigest(checkpoints)
+      await assertPhysicalCheckpointCapacityCoverage(manager, checkpoints)
+      assertMovementCheckpointRows(checkpoints, {
+        activation_id: activationId,
+        required_after: activatedAt,
+        schema_version: SCHEMA_VERSION,
+      })
+      const digest = calculateMovementCheckpointDigest(
+        checkpoints,
+        SCHEMA_VERSION
+      )
       await manager.execute(
         `insert into flash_sale_capacity_movement_control
           (id, activation_id, required_after, schema_version, checkpoint_digest)
@@ -313,21 +263,28 @@ export class PostgresCapacityMovementLedgerStore
     control: ControlRow
   ): Promise<ActivateAllocationMovementLedgerResult> {
     if (
-      Number(control.schema_version) !== SCHEMA_VERSION ||
+      ![1, SCHEMA_VERSION].includes(Number(control.schema_version)) ||
       !SHA256.test(control.checkpoint_digest)
     ) {
       throw this.invariant("Movement ledger control is not supported or valid")
     }
     const checkpoints = await this.loadPhysicalCheckpoints(manager)
+    await assertPhysicalCheckpointCapacityCoverage(manager, checkpoints)
     const requiredAfter = asDate(control.required_after)
-    this.assertCheckpointSet(checkpoints, control.activation_id, requiredAfter)
-    if (checkpointDigest(checkpoints) !== control.checkpoint_digest) {
+    assertMovementCheckpointRows(checkpoints, control)
+    if (
+      calculateMovementCheckpointDigest(
+        checkpoints,
+        Number(control.schema_version)
+      ) !==
+      control.checkpoint_digest
+    ) {
       throw this.invariant("Movement ledger checkpoint digest does not match")
     }
     return {
       activation_id: control.activation_id,
       required_after: requiredAfter,
-      schema_version: SCHEMA_VERSION,
+      schema_version: Number(control.schema_version) as 1 | 2,
       checkpoint_count: checkpoints.length,
       replayed: true,
     }
@@ -337,7 +294,7 @@ export class PostgresCapacityMovementLedgerStore
     manager: SqlEntityManager
   ): Promise<CheckpointRow[]> {
     return (await manager.execute(
-      `select id, activation_id, capacity_id, campaign_item_id, shard_no,
+      `select id, activation_id, capacity_id, campaign_item_id, checkpoint_kind, shard_no,
               opening_granted_quantity, opening_available_quantity,
               opening_held_quantity, opening_consumed_quantity,
               capacity_version, activated_at,
@@ -350,62 +307,6 @@ export class PostgresCapacityMovementLedgerStore
         order by capacity_id, id
         for update`
     )) as CheckpointRow[]
-  }
-
-  private assertCheckpointSet(
-    checkpoints: CheckpointRow[],
-    activationId: string,
-    activatedAt: Date
-  ): void {
-    for (const checkpoint of checkpoints) {
-      const granted = canonicalInteger(checkpoint.opening_granted_quantity)
-      const available = canonicalInteger(checkpoint.opening_available_quantity)
-      const held = canonicalInteger(checkpoint.opening_held_quantity)
-      const consumed = canonicalInteger(checkpoint.opening_consumed_quantity)
-      const rawValues = [
-        checkpoint.raw_opening_granted_quantity,
-        checkpoint.raw_opening_available_quantity,
-        checkpoint.raw_opening_held_quantity,
-        checkpoint.raw_opening_consumed_quantity,
-      ].map((raw) => {
-        try {
-          const value = JSON.parse(raw) as {
-            value?: unknown
-            precision?: unknown
-          }
-          return value.precision === 20 && typeof value.value === "string"
-            ? value.value
-            : "invalid"
-        } catch {
-          return "invalid"
-        }
-      })
-      if (
-        checkpoint.deleted_at !== null ||
-        checkpoint.activation_id !== activationId ||
-        asDate(checkpoint.activated_at).getTime() !== activatedAt.getTime() ||
-        granted === "invalid" ||
-        available === "invalid" ||
-        held === "invalid" ||
-        consumed === "invalid" ||
-        granted !== rawValues[0] ||
-        available !== rawValues[1] ||
-        held !== rawValues[2] ||
-        consumed !== rawValues[3] ||
-        BigInt(granted) <= 0n ||
-        BigInt(available) < 0n ||
-        BigInt(held) < 0n ||
-        BigInt(consumed) < 0n ||
-        BigInt(available) + BigInt(held) + BigInt(consumed) !==
-          BigInt(granted) ||
-        canonicalInteger(checkpoint.shard_no) === "invalid" ||
-        Number(checkpoint.shard_no) < 0 ||
-        canonicalInteger(checkpoint.capacity_version) === "invalid" ||
-        Number(checkpoint.capacity_version) < 1
-      ) {
-        throw this.invariant("Movement ledger checkpoint content is invalid")
-      }
-    }
   }
 
   private async transaction<T>(

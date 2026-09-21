@@ -6,7 +6,10 @@ import {
 } from "@medusajs/framework/mikro-orm/postgresql"
 import { CustomDBMigrator } from "@medusajs/framework/utils"
 import path from "path"
-import { FlashSalePluginModule } from "../../../types"
+import {
+  CapacityMovementCheckpointKind,
+  FlashSalePluginModule,
+} from "../../../types"
 import {
   AllocationCampaignFence,
   AllocationHold,
@@ -21,6 +24,7 @@ import {
   SubjectAllocation,
 } from "../models"
 import FlashSaleAllocationModuleService from "../service"
+import { createAllocationConfigurationHash } from "../application"
 import {
   EXPIRY_DOWNGRADE_AUDIT_CODE,
   lockExpiryDowngradeCandidates,
@@ -56,6 +60,30 @@ const models = [
   SubjectAllocation,
 ]
 
+const ALLOCATION_MIGRATION = {
+  INITIAL: "Migration20260919231655",
+  FENCE: "Migration20260920140041",
+  EXPIRY: "Migration20260920142601",
+  SETTLEMENT: "Migration20260920162302",
+  OUTBOX: "Migration20260920202643",
+  OUTBOX_CONSTRAINTS: "Migration20260920203412",
+  MOVEMENT: "Migration20260921054303",
+  MOVEMENT_DIGEST: "Migration20260921060745",
+  MOVEMENT_CHECKPOINT_KIND: "Migration20260921064136",
+  MOVEMENT_ATTEMPT_BINDING: "Migration20260921071902",
+} as const
+
+type NamedMigrator = {
+  down(options: {
+    migrations: string[]
+  }): Promise<Array<{ name: string; path?: string }>>
+}
+
+async function downNamed(migrator: NamedMigrator, name: string): Promise<void> {
+  const reverted = await migrator.down({ migrations: [name] })
+  expect(reverted.map((migration) => migration.name)).toEqual([name])
+}
+
 moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleName: FlashSalePluginModule.ALLOCATION,
   resolve: path.resolve(__dirname, ".."),
@@ -67,7 +95,19 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     it("reverts and reapplies the Allocation migration without schema loss", async () => {
       const orm = MikroOrmWrapper.getOrm()
       const migrator = orm.getMigrator()
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      const afterCheckpointKindDown =
+        (await MikroOrmWrapper.forkManager().execute(
+          `select exists(select 1 from information_schema.columns
+                  where table_name = 'flash_sale_capacity_movement_checkpoint'
+                    and column_name = 'checkpoint_kind') as checkpoint_kind_column`
+        )) as Array<{ checkpoint_kind_column: boolean }>
+      expect(afterCheckpointKindDown).toEqual([
+        { checkpoint_kind_column: false },
+      ])
+
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
       const afterDigestDown = (await MikroOrmWrapper.forkManager().execute(
         `select
           to_regclass('public.flash_sale_capacity_movement') as movement_table,
@@ -91,7 +131,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT)
       const afterMovementDown =
         (await MikroOrmWrapper.forkManager().execute(
           `select
@@ -114,7 +154,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX_CONSTRAINTS)
       const afterOutboxConstraintDown =
         (await MikroOrmWrapper.forkManager().execute(
           `select
@@ -132,7 +172,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX)
       const afterOutboxDown = (await MikroOrmWrapper.forkManager().execute(
         `select
           to_regclass('public.flash_sale_allocation_outbox_event') as event_table,
@@ -142,7 +182,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         { event_table: null, control_table: null },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.SETTLEMENT)
       const afterSettlementDown = (await MikroOrmWrapper.forkManager().execute(
         `select
           to_regclass('public.flash_sale_allocation_campaign_fence') as fence_table,
@@ -163,7 +203,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.EXPIRY)
       const afterExpiryDown = (await MikroOrmWrapper.forkManager().execute(
         `select
           to_regclass('public.flash_sale_allocation_campaign_fence') as fence_table,
@@ -176,7 +216,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.FENCE)
       const afterFenceDown = (await MikroOrmWrapper.forkManager().execute(
         `select
           to_regclass('public.flash_sale_allocation_campaign_fence') as fence_table,
@@ -186,7 +226,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         { fence_table: null, policy_table: "flash_sale_allocation_policy" },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.INITIAL)
       const afterDown = (await MikroOrmWrapper.forkManager().execute(
         "select to_regclass('public.flash_sale_allocation_policy') as table_name"
       )) as Array<{ table_name: string | null }>
@@ -214,7 +254,24 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
                   where conname = 'ck_flash_sale_allocation_outbox_bounded_identifiers') as outbox_bounded_check,
           exists(select 1 from information_schema.columns
                   where table_name = 'flash_sale_capacity_movement_control'
-                    and column_name = 'checkpoint_digest') as movement_digest_column`
+                    and column_name = 'checkpoint_digest') as movement_digest_column,
+          exists(select 1 from information_schema.columns
+                  where table_name = 'flash_sale_capacity_movement_checkpoint'
+                    and column_name = 'checkpoint_kind') as checkpoint_kind_column,
+          exists(select 1 from information_schema.columns
+                  where table_name = 'flash_sale_purchase_attempt'
+                    and column_name = 'hold_movement_activation_id') as hold_binding_column,
+          exists(select 1 from information_schema.columns
+                  where table_name = 'flash_sale_purchase_attempt'
+                    and column_name = 'terminal_movement_activation_id') as terminal_binding_column,
+          exists(select 1 from pg_constraint c
+                  join pg_class t on t.oid = c.conrelid
+                  where t.relname = 'flash_sale_capacity_movement_checkpoint'
+                    and pg_get_constraintdef(c.oid) like '%checkpoint_kind%cutover%provision%') as checkpoint_kind_check,
+          exists(select 1 from pg_constraint
+                  where conname = 'ck_flash_sale_attempt_hold_movement_activation') as hold_binding_check,
+          exists(select 1 from pg_constraint
+                  where conname = 'ck_flash_sale_attempt_terminal_movement_activation') as terminal_binding_check`
       )) as Array<Record<string, boolean>>
       expect(evidence).toEqual([
         {
@@ -229,6 +286,12 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           capacity_check: true,
           outbox_bounded_check: true,
           movement_digest_column: true,
+          checkpoint_kind_column: true,
+          hold_binding_column: true,
+          terminal_binding_column: true,
+          checkpoint_kind_check: true,
+          hold_binding_check: true,
+          terminal_binding_check: true,
         },
       ])
     })
@@ -236,8 +299,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     it("upgrades a populated Phase 1 schema into an empty activatable movement ledger without changing legacy columns", async () => {
       const migrator = MikroOrmWrapper.getOrm().getMigrator()
       const manager = MikroOrmWrapper.forkManager()
-      await migrator.down()
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT)
 
       await manager.execute(
         `insert into flash_sale_allocation_policy
@@ -345,7 +410,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             legacyTables.map(async (table) => [
               table,
               await manager.execute(
-                `select to_jsonb(record) as row from "${table}" record order by id`
+                `select to_jsonb(record)
+                          - 'hold_movement_activation_id'
+                          - 'terminal_movement_activation_id' as row
+                   from "${table}" record order by id`
               ),
             ])
           )
@@ -356,6 +424,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
                   is_nullable, column_default
              from information_schema.columns
             where table_schema = current_schema()
+              and column_name not in (
+                'hold_movement_activation_id',
+                'terminal_movement_activation_id'
+              )
               and table_name in (
                 select value
                   from jsonb_array_elements_text(?::jsonb) selected(value)
@@ -384,7 +456,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       ).resolves.toMatchObject({
         checkpoint_count: 1,
         replayed: false,
-        schema_version: 1,
+        schema_version: 2,
       })
       expect(
         await manager.execute(
@@ -394,7 +466,23 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
              (select count(*)::int from flash_sale_capacity_movement_control) as controls`
         )
       ).toEqual([{ movements: 0, checkpoints: 1, controls: 1 }])
-      await expect(migrator.down()).rejects.toThrow(
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING],
+        })
+      ).rejects.toThrow(
+        "refusing to downgrade non-empty capacity movement ledger"
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND],
+        })
+      ).rejects.toThrow(
+        "refusing to downgrade non-empty capacity movement ledger"
+      )
+      await expect(
+        migrator.down({ migrations: [ALLOCATION_MIGRATION.MOVEMENT_DIGEST] })
+      ).rejects.toThrow(
         "refusing to downgrade non-empty capacity movement ledger"
       )
       expect(
@@ -408,6 +496,143 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       ).toEqual([{ digest_column: true }])
     })
 
+    it("replays a v1 root after checkpoint-kind upgrade and atomically rolls it to v2 on first provision", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+
+      const activatedAt = new Date("2020-01-01T12:00:00.000Z")
+      const checkpoint = {
+        id: "checkpoint-v1-upgrade",
+        activation_id: "activation-v1-upgrade",
+        capacity_id: "capacity-v1-upgrade",
+        campaign_item_id: "item-v1-upgrade",
+        checkpoint_kind: CapacityMovementCheckpointKind.CUTOVER,
+        shard_no: 0,
+        opening_granted_quantity: "7",
+        opening_available_quantity: "7",
+        opening_held_quantity: "0",
+        opening_consumed_quantity: "0",
+        capacity_version: 1,
+        activated_at: activatedAt,
+        raw_opening_granted_quantity: '{"value":"7","precision":20}',
+        raw_opening_available_quantity: '{"value":"7","precision":20}',
+        raw_opening_held_quantity: '{"value":"0","precision":20}',
+        raw_opening_consumed_quantity: '{"value":"0","precision":20}',
+        deleted_at: null,
+      }
+      // Frozen v1 canonical tuple and digest. Do not call the production
+      // helper: a breaking algorithm change must fail this compatibility test.
+      const legacyCanonical =
+        '[["checkpoint-v1-upgrade","activation-v1-upgrade","capacity-v1-upgrade","item-v1-upgrade","0","7","7","0","0","1","2020-01-01T12:00:00.000Z","{\\"value\\":\\"7\\",\\"precision\\":20}","{\\"value\\":\\"7\\",\\"precision\\":20}","{\\"value\\":\\"0\\",\\"precision\\":20}","{\\"value\\":\\"0\\",\\"precision\\":20}"]]'
+      expect(legacyCanonical).toContain("checkpoint-v1-upgrade")
+      const legacyDigest =
+        "7a34fe4eca251dfb651cf6c0fff55f8d0f1a032df8ef7fbaef008dbc6675a967"
+      await manager.execute(
+        `insert into flash_sale_allocation_policy
+          (id, campaign_id, rules_version, configuration_hash, state,
+           starts_at, ends_at, hold_ttl_seconds, per_subject_limit, version)
+         values ('policy-v1-upgrade', 'campaign-v1-upgrade', 1, ?, 'open',
+                 now() - interval '1 hour', now() + interval '1 hour', 300, 7, 1)`,
+        ["1".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity
+          (id, allocation_policy_id, campaign_item_id, shard_no, state,
+           granted_quantity, held_quantity, consumed_quantity, rules_version,
+           version, raw_granted_quantity, raw_held_quantity, raw_consumed_quantity)
+         values (?, 'policy-v1-upgrade', ?, 0, 'open', 7, 0, 0, 1, 1,
+                 jsonb_build_object('value', '7', 'precision', 20),
+                 jsonb_build_object('value', '0', 'precision', 20),
+                 jsonb_build_object('value', '0', 'precision', 20))`,
+        [checkpoint.capacity_id, checkpoint.campaign_item_id]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_movement_checkpoint
+          (id, activation_id, capacity_id, campaign_item_id, shard_no,
+           opening_granted_quantity, opening_available_quantity,
+           opening_held_quantity, opening_consumed_quantity, capacity_version,
+           activated_at, raw_opening_granted_quantity,
+           raw_opening_available_quantity, raw_opening_held_quantity,
+           raw_opening_consumed_quantity)
+         values (?, ?, ?, ?, 0, 7, 7, 0, 0, 1, ?::timestamptz,
+                 jsonb_build_object('value', '7', 'precision', 20),
+                 jsonb_build_object('value', '7', 'precision', 20),
+                 jsonb_build_object('value', '0', 'precision', 20),
+                 jsonb_build_object('value', '0', 'precision', 20))`,
+        [
+          checkpoint.id,
+          checkpoint.activation_id,
+          checkpoint.capacity_id,
+          checkpoint.campaign_item_id,
+          activatedAt,
+        ]
+      )
+      await manager.execute(
+        `insert into flash_sale_capacity_movement_control
+          (id, activation_id, required_after, schema_version, checkpoint_digest)
+         values ('allocation-movement-ledger', ?, ?::timestamptz, 1, ?)`,
+        [checkpoint.activation_id, activatedAt, legacyDigest]
+      )
+
+      await migrator.up()
+      await expect(service.activateAllocationMovementLedger({})).resolves.toMatchObject({
+        activation_id: checkpoint.activation_id,
+        schema_version: 1,
+        replayed: true,
+      })
+      const held = await service.claimAndHoldQuota({
+        campaign_id: "campaign-v1-upgrade",
+        subject_id: "subject-v1-writer",
+        cart_id: "cart-v1-writer",
+        idempotency_key_hash: "2".repeat(64),
+        expected_rules_version: 1,
+        items: [{ campaign_item_id: checkpoint.campaign_item_id, quantity: 1 }],
+      })
+      expect(held).toMatchObject({
+        status: "held",
+        attempt: {
+          hold_movement_activation_id: checkpoint.activation_id,
+        },
+      })
+      await expect(
+        service.claimAndHoldQuota({
+          campaign_id: "campaign-v1-upgrade",
+          subject_id: "subject-v1-writer",
+          cart_id: "cart-v1-writer",
+          idempotency_key_hash: "2".repeat(64),
+          expected_rules_version: 1,
+          items: [{ campaign_item_id: checkpoint.campaign_item_id, quantity: 1 }],
+        })
+      ).resolves.toMatchObject({ replayed: true })
+      const base = {
+        campaign_id: "campaign-v2-roll",
+        rules_version: 1,
+        starts_at: "2020-01-01T00:00:00.000Z",
+        ends_at: "2035-01-01T00:00:00.000Z",
+        hold_ttl_seconds: 300,
+        per_subject_limit: 5,
+        items: [{ campaign_item_id: "item-v2-roll", quota: 5 }],
+      }
+      await service.provisionAllocation({
+        ...base,
+        configuration_hash: createAllocationConfigurationHash(base),
+      })
+      expect(
+        await manager.execute(
+          `select schema_version::int, count(*) over()::int as controls
+             from flash_sale_capacity_movement_control`
+        )
+      ).toEqual([{ schema_version: 2, controls: 1 }])
+      await expect(service.activateAllocationMovementLedger({})).resolves.toMatchObject({
+        activation_id: checkpoint.activation_id,
+        schema_version: 2,
+        checkpoint_count: 2,
+        replayed: true,
+      })
+    })
+
     it("blocks the original movement-table downgrade after the digest migration is removed", async () => {
       const manager = MikroOrmWrapper.forkManager()
       const migrator = MikroOrmWrapper.getOrm().getMigrator()
@@ -415,14 +640,18 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       // The newest migration may be removed only while all ledger tables are
       // empty. Populate the older control shape afterwards to exercise the
       // independent guard in the original table-creation migration.
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
       await manager.execute(
         `insert into flash_sale_capacity_movement_control
           (id, activation_id, required_after, schema_version)
          values ('allocation-movement-ledger', 'older-guard-proof', now(), 1)`
       )
 
-      await expect(migrator.down()).rejects.toThrow(
+      await expect(
+        migrator.down({ migrations: [ALLOCATION_MIGRATION.MOVEMENT] })
+      ).rejects.toThrow(
         "refusing to downgrade non-empty capacity movement ledger"
       )
       expect(
@@ -439,6 +668,44 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           control_table: true,
         },
       ])
+    })
+
+    it("blocks Attempt-binding downgrade when a durable binding is non-null", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `insert into flash_sale_allocation_policy
+          (id, campaign_id, rules_version, configuration_hash, state,
+           starts_at, ends_at, hold_ttl_seconds, per_subject_limit, version)
+         values ('policy-binding-guard', 'campaign-binding-guard', 1, ?, 'open',
+                 now() - interval '1 hour', now() + interval '1 hour', 300, 5, 1)`,
+        ["8".repeat(64)]
+      )
+      await manager.execute(
+        `insert into flash_sale_purchase_attempt
+          (id, allocation_policy_id, campaign_id, subject_id, cart_id,
+           idempotency_key_hash, request_hash, state, rules_version,
+           expires_at, version, hold_movement_activation_id)
+         values ('attempt-binding-guard', 'policy-binding-guard',
+                 'campaign-binding-guard', 'subject-binding-guard',
+                 'cart-binding-guard', ?, ?, 'pending', 1,
+                 now() + interval '5 minutes', 1, 'activation-binding-guard')`,
+        ["9".repeat(64), "a".repeat(64)]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING],
+        })
+      ).rejects.toThrow(
+        "refusing to downgrade non-empty capacity movement ledger"
+      )
+      expect(
+        await manager.execute(
+          `select exists(select 1 from information_schema.columns
+                  where table_name = 'flash_sale_purchase_attempt'
+                    and column_name = 'hold_movement_activation_id') as binding_column`
+        )
+      ).toEqual([{ binding_column: true }])
     })
 
     it("allows movement-ledger downgrade preflight only when all three physical tables are empty", async () => {
@@ -558,12 +825,14 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       const orm = MikroOrmWrapper.getOrm()
       const migrator = orm.getMigrator()
       const manager = MikroOrmWrapper.forkManager()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX_CONSTRAINTS)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX)
+      await downNamed(migrator, ALLOCATION_MIGRATION.SETTLEMENT)
+      await downNamed(migrator, ALLOCATION_MIGRATION.EXPIRY)
       await manager.execute(
         `insert into flash_sale_allocation_policy
           (id, campaign_id, rules_version, configuration_hash, state,
@@ -722,12 +991,16 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         held.attempt.id,
       ])
 
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await expect(migrator.down()).rejects.toThrow()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX_CONSTRAINTS)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX)
+      await downNamed(migrator, ALLOCATION_MIGRATION.SETTLEMENT)
+      await expect(
+        migrator.down({ migrations: [ALLOCATION_MIGRATION.EXPIRY] })
+      ).rejects.toThrow()
       await expect(
         prepareExpirySchemaDowngrade(manager as SqlEntityManager, "dry-run")
       ).resolves.toEqual({
@@ -772,7 +1045,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         },
       ])
 
-      await migrator.down()
+      await downNamed(migrator, ALLOCATION_MIGRATION.EXPIRY)
       const oldSchema = await manager.execute(
         `select
           pg_get_constraintdef(a.oid) not like '%quota_expired%' as old_attempt_constraint,
@@ -904,11 +1177,15 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       }
       await service.beginQuotaSettlement(command)
 
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await migrator.down()
-      await expect(migrator.down()).rejects.toThrow()
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_ATTEMPT_BINDING)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_CHECKPOINT_KIND)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT_DIGEST)
+      await downNamed(migrator, ALLOCATION_MIGRATION.MOVEMENT)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX_CONSTRAINTS)
+      await downNamed(migrator, ALLOCATION_MIGRATION.OUTBOX)
+      await expect(
+        migrator.down({ migrations: [ALLOCATION_MIGRATION.SETTLEMENT] })
+      ).rejects.toThrow()
       await expect(
         prepareExpirySchemaDowngrade(manager as SqlEntityManager, "dry-run")
       ).rejects.toThrow("QUOTA_COMMITTING")

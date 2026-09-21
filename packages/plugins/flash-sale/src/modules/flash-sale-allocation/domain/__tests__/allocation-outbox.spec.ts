@@ -33,6 +33,8 @@ function attempt(
     terminal_at: null,
     settlement_id: null,
     settlement_started_at: null,
+    hold_movement_activation_id: null,
+    terminal_movement_activation_id: null,
     created_at: now,
     updated_at: now,
     deleted_at: null,

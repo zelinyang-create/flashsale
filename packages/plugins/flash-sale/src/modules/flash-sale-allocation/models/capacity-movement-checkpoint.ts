@@ -1,4 +1,5 @@
 import { model } from "@medusajs/framework/utils"
+import { CapacityMovementCheckpointKind } from "../../../types"
 import Capacity from "./capacity"
 
 const CapacityMovementCheckpoint = model
@@ -14,6 +15,9 @@ const CapacityMovementCheckpoint = model
         mappedBy: "movement_checkpoints",
       }),
       campaign_item_id: model.text(),
+      checkpoint_kind: model
+        .enum(CapacityMovementCheckpointKind)
+        .default(CapacityMovementCheckpointKind.CUTOVER),
       shard_no: model.number(),
       opening_granted_quantity: model.bigNumber(),
       opening_available_quantity: model.bigNumber(),

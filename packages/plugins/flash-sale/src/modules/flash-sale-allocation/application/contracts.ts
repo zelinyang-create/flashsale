@@ -44,7 +44,7 @@ export type ActivateAllocationMovementLedgerCommand = Readonly<
 export type ActivateAllocationMovementLedgerResult = Readonly<{
   activation_id: string
   required_after: Date
-  schema_version: 1
+  schema_version: 1 | 2
   checkpoint_count: number
   replayed: boolean
 }>
@@ -106,6 +106,8 @@ export type ClaimedPurchaseAttempt = Readonly<{
   terminal_at: Date | null
   settlement_id: string | null
   settlement_started_at: Date | null
+  hold_movement_activation_id: string | null
+  terminal_movement_activation_id: string | null
   created_at: Date
   updated_at: Date
   deleted_at: Date | null

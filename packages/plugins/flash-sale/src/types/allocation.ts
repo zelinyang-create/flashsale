@@ -47,6 +47,11 @@ export enum CapacityMovementBucket {
   CONSUMED = "consumed",
 }
 
+export enum CapacityMovementCheckpointKind {
+  CUTOVER = "cutover",
+  PROVISION = "provision",
+}
+
 export type CapacityMovementDTO = {
   id: string
   capacity_id: string
@@ -70,6 +75,7 @@ export type CapacityMovementCheckpointDTO = {
   activation_id: string
   capacity_id: string
   campaign_item_id: string
+  checkpoint_kind: CapacityMovementCheckpointKind
   shard_no: number
   opening_granted_quantity: number
   opening_available_quantity: number
@@ -194,6 +200,8 @@ export type PurchaseAttemptDTO = {
   terminal_at: Date | null
   settlement_id: string | null
   settlement_started_at: Date | null
+  hold_movement_activation_id: string | null
+  terminal_movement_activation_id: string | null
   created_at: Date
   updated_at: Date
   deleted_at: Date | null

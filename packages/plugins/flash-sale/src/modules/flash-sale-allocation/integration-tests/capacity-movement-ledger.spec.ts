@@ -140,7 +140,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
       await expect(
         service.activateAllocationMovementLedger({})
       ).resolves.toMatchObject({
-        schema_version: 1,
+        schema_version: 2,
         checkpoint_count: 0,
         replayed: false,
       })

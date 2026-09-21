@@ -415,7 +415,7 @@ quantity, raw_quantity, fence_token
 created_at, updated_at, deleted_at
 
 CapacityMovementCheckpoint:
-id, activation_id, capacity_id, campaign_item_id, shard_no
+id, activation_id, capacity_id, campaign_item_id, checkpoint_kind, shard_no
 opening_granted_quantity, opening_available_quantity
 opening_held_quantity, opening_consumed_quantity
 raw_opening_granted_quantity, raw_opening_available_quantity
@@ -424,6 +424,9 @@ capacity_version, activated_at
 
 CapacityMovementControl:
 id, activation_id, required_after, schema_version, checkpoint_digest
+
+PurchaseAttempt（Movement binding）:
+hold_movement_activation_id, terminal_movement_activation_id  # nullable
 ```
 
 唯一约束：`(attempt_id, campaign_item_id, transition_version)`。
@@ -452,16 +455,44 @@ epoch 或 lease token，也不能阻止旧 Worker 提交。
 聚合，为每个 Capacity 保存 opening checkpoint，计算覆盖完整 checkpoint 不可变元组的
 `checkpoint_digest`，最后以单例 Control 提交切换水位；既有 Phase 1 余额不会被伪造成
 Movement。首次激活要求 Movement/Checkpoint/Control 三表物理全空（包括软删除行）。精确重放
-要求物理上恰好一条未删除的固定 ID Control，所有 Checkpoint 均未删除、属于同一
-Activation、`activated_at = required_after`，且重算 digest 一致；任一 orphan、软删除行或内容漂移
+要求物理上恰好一条未删除的固定 ID Control，Checkpoint 与物理 Capacity 一一覆盖且均未删除、属于同一
+Activation；`cutover.activated_at = required_after`，`provision.activated_at >= required_after`，且重算 digest 一致；任一 orphan、软删除行或内容漂移
 都 fail closed。
 
-Phase 2A-1 **尚未接入在线业务 writer**，不得在生产启用。Phase 2A-2 必须先让 Hold、Consume、
-Release、Expire 与激活共享锁协议，并在同一事务写 Balance、Attempt/Hold、Movement 和 Outbox，之后
-才能执行激活。详见 ADR-0011 与 `runbooks/capacity-movement-ledger-activation.md`。
+Phase 2A-2a 已接入在线业务 writer。所有 Allocation 命令在取得其他应用锁前，先取得与激活同一
+namespace 的 shared transaction advisory lock；激活取得 exclusive 形式，因此切换不会从一次余额变更
+中间穿过。Hold、Consume、Release、Expire 在同一 PostgreSQL 事务内更新 Capacity/Subject/Hold/Attempt、
+写 Movement 和 Outbox。Fresh transition 遇到任何 Movement 唯一键冲突都会 fail closed 并回滚；只有
+明确 replay 路径可以一次读取同一 Attempt 下包含软删除行的**全部物理 Movement**，按
+state/version/binding/Hold 推导允许的 Version、Kind 与 Item 精确并集，再逐行核对不可变 tuple、raw quantity
+与 fingerprint；额外 version/kind/item、缺失、
+重复或软删除 Movement 都 fail closed。
 
-带 Phase 1 旧数据的环境可以执行向上迁移：迁移只新增三张空表，不改写旧行；基线由后续受控激活
-建立。反向降级只允许在三张表的物理行数都为 0（因此从未激活、从未写 Movement）时执行；
+是否必须存在 Movement 不依赖 `created_at/updated_at` 与切换时间的比较。Attempt 使用可空的
+`hold_movement_activation_id` 和 `terminal_movement_activation_id` 保存离散事实：null 表示未激活的
+Legacy 转移并且禁止存在 Movement；非 null 表示必须等于当前 Control Activation，且必须存在完整
+Movement 集合。Fresh Hold/终态 CAS 与 binding、余额、Movement、Outbox 在同一事务提交。
+
+Checkpoint 使用显式 `checkpoint_kind`：激活时创建 `cutover`；激活后低频 Provision 在锁定 Control 行后
+创建 `provision`，其 opening 必须是全额 AVAILABLE、HELD/CONSUMED 为 0、Capacity Version 为 1。
+Fresh Provision 在创建任何新 Capacity/Checkpoint 前先验证旧的完整物理 Root，防止把既有篡改洗入新
+摘要；随后读取全部物理 Checkpoint，重算并 CAS 更新 Control 的 `checkpoint_digest`；热写路径不滚动
+全局摘要，只要求目标 Capacity 存在合法 Checkpoint。这样新 Campaign 可以在激活后上线，同时保留
+Control Root 的可验证性。
+
+Root Schema Version 采用兼容升级：历史 v1 digest 不含 `checkpoint_kind`，因此 v1 只允许全部为
+`cutover`；当前新激活写 v2，digest 包含显式 kind。升级后可精确重放 v1；首次 Active Provision 先验证
+v1 Root，再在同一 Control CAS 中升级 `schema_version=2` 并写 v2 digest，不通过 SQL 猜测或重算旧摘要。
+
+当前证据属于 **Phase 2A-2a**：真实 PostgreSQL 已覆盖 v2/v3/v4、精确 replay、脏 Movement 冲突回滚、
+Movement 后故障点回滚、Legacy Cutover、并发 Provision Root 和 Activation/Writer 竞态。跨进程 kill/crash
+窗口与更完整的多实例故障矩阵属于 Phase 2A-2b；完成前仍不得执行生产激活。详见 ADR-0011、ADR-0012 与
+`runbooks/capacity-movement-ledger-activation.md`。
+
+带 Phase 1 旧数据的环境可以执行向上迁移：迁移新增 Movement/Checkpoint/Control 三张空表，并为
+Control 增加 digest、为 Checkpoint 增加 kind、为 PurchaseAttempt 增加两个 nullable activation binding；
+这些变更不改写既有业务值，基线由后续受控激活建立。反向降级只允许在三张表的物理行数都为 0
+且 Attempt binding 全空（因此从未激活、从未写 Movement）时执行；
 已激活或存在任何历史/软删除行时必须 fail closed，不得通过删数据来强制降级。
 
 ### 9.5 ReservationBinding、PaymentCommand 和可靠事件
@@ -483,8 +514,9 @@ status, attempt_count, next_check_at, last_error
 Outbox 保存稳定 Event ID 与 Aggregate Version；内部 Inbox 使用 `(consumer_name, event_id)` 唯一约束；Webhook Inbox 使用 `(provider, provider_account_id, provider_event_id)` 唯一约束。
 
 所有 Migration 通过 Module Migration Script 生成并做 no-drift 校验。唯一例外是 Movement Ledger
-两个 `down` 的数据保护：在同一事务内以 `ACCESS EXCLUSIVE` 锁住三表并确认物理全空后，才允许
-删除摘要列或表；这是防止 append-only 审计数据被回滚静默删除的显式安全硬化。
+四个相关 `down` 的数据保护：Attempt binding、Checkpoint Kind、Digest 与 Movement 表迁移都在同一
+事务内以 `ACCESS EXCLUSIVE` 锁住三表并确认物理全空后，才允许删除语义列或表；这是防止 append-only
+审计证据或 replay 判定依据被回滚静默删除的显式安全硬化。
 
 ## 10. Virtual Waiting Room
 
@@ -1393,8 +1425,9 @@ Allocation/Checkout 各自的原子 Outbox Producer/数据库投递状态机、�
 Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Production Consumer/Webhook
 Inbox、Campaign Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
 
-当前进度：Phase 2A-1 已完成 Movement Ledger schema、baseline/cutover activation 内核；在线
-Movement writer、Reconcile/Rebuild/Repair 属于后续 2A-2/2A-3。
+当前进度：Phase 2A-2a 已完成 Movement Ledger schema、baseline/cutover、事务内在线 writer、
+滚动 Provision Checkpoint Root 与单进程真实 PostgreSQL 故障回滚证据。跨进程 kill/crash 矩阵属于
+2A-2b；Reconcile/Rebuild/Repair 属于 2A-3。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

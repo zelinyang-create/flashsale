@@ -30,6 +30,8 @@ const PurchaseAttempt = model
       terminal_at: model.dateTime().nullable(),
       settlement_id: model.text().nullable(),
       settlement_started_at: model.dateTime().nullable(),
+      hold_movement_activation_id: model.text().nullable(),
+      terminal_movement_activation_id: model.text().nullable(),
       holds: model.hasMany(() => AllocationHold, {
         mappedBy: "attempt",
       }),
@@ -88,6 +90,16 @@ const PurchaseAttempt = model
       name: "CK_flash_sale_attempt_committing_settlement",
       expression:
         "state <> 'quota_committing' OR (settlement_id IS NOT NULL AND settlement_started_at IS NOT NULL)",
+    },
+    {
+      name: "CK_flash_sale_attempt_hold_movement_activation",
+      expression:
+        "hold_movement_activation_id IS NULL OR char_length(hold_movement_activation_id) BETWEEN 1 AND 255",
+    },
+    {
+      name: "CK_flash_sale_attempt_terminal_movement_activation",
+      expression:
+        "terminal_movement_activation_id IS NULL OR char_length(terminal_movement_activation_id) BETWEEN 1 AND 255",
     },
   ])
 

@@ -1573,6 +1573,25 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "checkpoint_kind": {
+          "name": "checkpoint_kind",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": false,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": "'cutover'",
+          "comment": null,
+          "enumItems": [
+            "cutover",
+            "provision"
+          ],
+          "mappedType": "enum"
+        },
         "shard_no": {
           "name": "shard_no",
           "type": "integer",
@@ -2309,6 +2328,38 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "hold_movement_activation_id": {
+          "name": "hold_movement_activation_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "terminal_movement_activation_id": {
+          "name": "terminal_movement_activation_id",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamptz",
@@ -2456,6 +2507,16 @@
           "name": "CK_flash_sale_attempt_committing_settlement",
           "expression": "state <> 'quota_committing' OR (settlement_id IS NOT NULL AND settlement_started_at IS NOT NULL)",
           "definition": "check ((state <> 'quota_committing' OR (settlement_id IS NOT NULL AND settlement_started_at IS NOT NULL)))"
+        },
+        {
+          "name": "CK_flash_sale_attempt_hold_movement_activation",
+          "expression": "hold_movement_activation_id IS NULL OR char_length(hold_movement_activation_id) BETWEEN 1 AND 255",
+          "definition": "check ((hold_movement_activation_id IS NULL OR char_length(hold_movement_activation_id) BETWEEN 1 AND 255))"
+        },
+        {
+          "name": "CK_flash_sale_attempt_terminal_movement_activation",
+          "expression": "terminal_movement_activation_id IS NULL OR char_length(terminal_movement_activation_id) BETWEEN 1 AND 255",
+          "definition": "check ((terminal_movement_activation_id IS NULL OR char_length(terminal_movement_activation_id) BETWEEN 1 AND 255))"
         }
       ],
       "foreignKeys": {
