@@ -1333,6 +1333,13 @@ Nightly/Release Candidate：多实例并发、Failpoint、Toxiproxy、No/Fixed/A
 
 ### Phase 1：MVP 正确性内核，约两周
 
+状态：**已完成**。2026-09-21 在提交 `a3ea114968b0262bc14edb2f7a1229453ae533da` 上通过
+4 个独立 Node 子进程、Quota 50、每轮 500 个并发 Allocation Command、连续 10 轮的正式正确性门禁；
+50/500 主竞争场景累计 500 Held、4,500 Capacity Exhausted、零意外；Quota 与 Same-key 证据中
+零重复业务身份，所有被测 Allocation 场景零 Reconciliation Issue；
+同时通过 Checkout 单 Order/Reservation 的响应丢失与竞态回归。详见
+`docs/flashsale/benchmarks/phase-1-correctness-gate-2026-09-21.md`。
+
 Plugin、Campaign、Attempt、Hold、条件 Quota Claim、Idempotency、Checkout Composition、Expiry、Reconciliation、
 Allocation/Checkout 各自的原子 Outbox Producer/数据库投递状态机、公平多 Lane Redis Queue Acceptance Dispatcher、
 两实例并发测试，以及 test-only Transactional Inbox/Effect Probe。Production Consumer Inbox 不属于当前 1F-B2 交付。
