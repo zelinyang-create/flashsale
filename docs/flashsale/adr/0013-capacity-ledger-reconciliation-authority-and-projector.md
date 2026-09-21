@@ -1,6 +1,6 @@
 # ADR-0013：Capacity Ledger 对账权威层级与纯函数 Projector
 
-- 状态：Accepted（Phase 2A-3a，仅契约与纯函数）
+- 状态：Accepted（Phase 2A-3a 契约/Projector；Phase 2A-3b 只读数据库审计）
 - 日期：2026-09-21
 - 关联：ADR-0011、ADR-0012
 
@@ -11,8 +11,8 @@ Checkpoint、Movement、Control、Attempt binding 和 Hold facts 可能分别完
 未知 schema 或错误 binding 的方式互相矛盾。若 Reconciler 在证据不闭合时自动补造或删除账本行，会把原始
 事故证据改写成看似一致的新历史，反而失去恢复依据。
 
-本 ADR 只定义权威边界、Issue taxonomy、输入输出契约和确定性 Projector。它不读取数据库、不落修复，
-也不表示 Phase 2A-3 的数据库 Reconcile/Rebuild/Repair 已完成。
+Phase 2A-3a 定义权威边界、Issue taxonomy、输入输出契约和确定性 Projector；Phase 2A-3b 增加只读数据库
+Reconciler。两者均不落修复，也不表示 Phase 2A-3 的 Rebuild/Repair 已完成。
 
 ## 决策一：权威层级
 
@@ -86,6 +86,33 @@ unsupported route/version/kind、duplicate Movement identity、Checkpoint 不守
 Issue classification 只有 `safe_repair` 与 `manual_required`。多个 Issue 混合时，`manual_required` 优先。
 类型独立于 Phase 1 `AllocationReconciliationIssue`，避免把在线业务审计与 Ledger 历史可信度混为一谈。
 
+## Phase 2A-3b：只读数据库审计
+
+数据库 Reconciler 在单个 PostgreSQL `REPEATABLE READ READ ONLY` 事务中建立快照，并先读取全局 Control、
+全部物理 Checkpoint/Movement、Policy、Capacity、Attempt 与 Hold。即使命令限定 `campaign_id`，也必须先完成全局 singleton、
+Capacity↔Checkpoint 一一覆盖和 checkpoint root 校验；其他 Campaign 的 root 破坏不能被局部 scope 隐藏。
+Root v1/v2 复用在线 Activation 已发布的 canonical 校验 helper，避免产生第二套 digest 规则。
+
+Policy/Campaign identity 同样属于闭合证据：Capacity 和 Attempt 必须指向同一个 live Policy，Attempt/Movement
+的 campaign 必须等于 Policy campaign，一个 Attempt 的全部 Hold 必须留在该 Policy 的 Capacity 集合中。
+每个 Policy 必须至少覆盖一个物理 Capacity（Provision 不允许空 items），Policy/Capacity state 必须属于已知
+枚举并保持一致；任何 Policy 或 Capacity 为 OPEN 时 repair scope 都必须是 OPEN。soft-deleted/orphan Policy、
+跨 Policy/Campaign 映射或状态分歧均为 `manual_required`。即使 Control、Checkpoint、Movement
+全空，Reconciler 仍会检查 Attempt/Hold；任何非空 ledger binding、soft-delete、orphan 或非法事实都会阻止
+`not_activated`。
+
+所有 numeric/raw 字段无损映射并调用同一个纯函数 Projector。查询使用首批无下界、后续按主键推进的
+nullable-cursor keyset batch，命令限制 `batch_size`、`sample_limit` 与 `statement_timeout_ms`；限制只作用于批量读取和结果采样，
+不会截断全局 root gate。当前物理扫描按既有主键索引推进，且 soft-deleted 行也必须参与，新增 deleted-at
+partial index 既不能代替物理全集校验，也没有足够 benchmark 证据，因此 3b 不新增索引或 migration。
+
+带 `campaign_id` 的请求必须命中至少一个由物理 Capacity 闭合覆盖的 Policy；孤立 Policy 不能伪造 scope，
+不存在或拼写错误的 scope 返回
+`SCOPE_NOT_FOUND/manual_required`，不能用空集合伪装成 healthy。该判断仅在全局 gate 之后执行。
+
+输出显式标记 `domain = movement_ledger`，不得覆盖或提升 Phase 1 audit 的 `healthy` 语义。3b 不暴露写入、
+不接 scheduled repair、不改 materialized counter，也不补造、删除或恢复任何 Ledger 行。
+
 ## 后续 Repair 锁协议（预告，不在 2A-3a 实现）
 
 后续数据库 Reconcile/Repair 至少需要：
@@ -96,11 +123,12 @@ Issue classification 只有 `safe_repair` 与 `manual_required`。多个 Issue �
 4. 仅对仍为 safe-repair candidate 的 materialized held/consumed/raw mirror 做 version CAS；
 5. 写独立审计证据，提交后再次对账。任何条件漂移均回滚并转人工。
 
-锁顺序必须与在线 Writer/Provision 协议一致，具体 SQL、批处理和恢复 Runbook 留待 Phase 2A-3b/3c。
+锁顺序必须与在线 Writer/Provision 协议一致，具体 SQL、批处理和恢复 Runbook 留待 Phase 2A-3c。
 
 ## 后果
 
 - 优点：不会用不可信 Ledger 覆盖仍在服务流量的在线状态；超大 numeric 无精度损失；Projector 可被大量
   单元测试和未来离线工具复用。
 - 代价：很多“看似可修”的缺口会被保守地升级为人工处理；Subject counter 需要独立事实来源与恢复设计。
-- 明确未完成：数据库 Reader、全局 root 重算、Reconcile Handler、Repair Writer、审计表、Runbook 和生产门禁。
+- 已完成：只读数据库 Reader、全局 root gate、Reconcile Handler 与有界结果采样。
+- 明确未完成：Repair Writer、Rebuild、修复审计表、Repair Runbook、定时修复和生产修复门禁。

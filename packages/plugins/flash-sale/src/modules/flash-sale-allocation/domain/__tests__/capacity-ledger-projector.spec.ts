@@ -12,14 +12,28 @@ import {
   LedgerCheckpointEntity,
   LedgerHoldEntity,
   LedgerMovementEntity,
+  LedgerPolicyEntity,
   LedgerProjectionInput,
   LedgerReconciliationIssueCode,
+  createCapacityMovementFingerprint,
   isCheckpointKindAllowedForRootSchema,
   reconcileCapacityLedgerProjection,
 } from ".."
 
 const ACTIVATION = "activation-1"
 const raw = (value: string) => ({ value, precision: 20 })
+
+function policy(
+  id = "policy-1",
+  campaignId = "campaign-1"
+): LedgerPolicyEntity {
+  return {
+    id,
+    campaign_id: campaignId,
+    state: "closed",
+    deleted_at: null,
+  }
+}
 
 function capacity(
   id: string,
@@ -30,6 +44,7 @@ function capacity(
 ): LedgerCapacityEntity {
   return {
     id,
+    allocation_policy_id: "policy-1",
     campaign_item_id: item,
     shard_no: "0",
     state: CapacityState.CLOSED,
@@ -83,6 +98,7 @@ function attempt(
     state === PurchaseAttemptState.QUOTA_COMMITTING
   return {
     id,
+    allocation_policy_id: "policy-1",
     campaign_id: "campaign-1",
     subject_id: `subject-${id}`,
     state,
@@ -143,21 +159,50 @@ function movement(
       CapacityMovementBucket.AVAILABLE,
     ],
   }[kind]
-  return {
-    id,
-    schema_version: "1",
+  const immutable = {
+    schema_version: 1 as const,
     capacity_id: holdRow.capacity_id,
     attempt_id: attemptRow.id,
     campaign_id: attemptRow.campaign_id,
     subject_id: attemptRow.subject_id,
     campaign_item_id: holdRow.campaign_item_id,
-    transition_version: transitionVersion,
+    transition_version: Number(transitionVersion),
     kind,
     from_bucket: route[0],
     to_bucket: route[1],
     quantity: holdRow.quantity,
+  }
+  return {
+    id,
+    ...immutable,
+    schema_version: "1",
+    transition_version: transitionVersion,
     raw_quantity: raw(holdRow.quantity),
+    fence_token: createCapacityMovementFingerprint(immutable),
     deleted_at: null,
+  }
+}
+
+function withTransitionVersion(
+  row: LedgerMovementEntity,
+  transitionVersion: string
+): LedgerMovementEntity {
+  const next = { ...row, transition_version: transitionVersion }
+  return {
+    ...next,
+    fence_token: createCapacityMovementFingerprint({
+      schema_version: 1,
+      capacity_id: next.capacity_id,
+      attempt_id: next.attempt_id,
+      campaign_id: next.campaign_id,
+      subject_id: next.subject_id,
+      campaign_item_id: next.campaign_item_id,
+      transition_version: Number(transitionVersion),
+      kind: next.kind as CapacityMovementKind,
+      from_bucket: next.from_bucket as CapacityMovementBucket,
+      to_bucket: next.to_bucket as CapacityMovementBucket,
+      quantity: next.quantity,
+    }),
   }
 }
 
@@ -245,6 +290,7 @@ function baseInput(): LedgerProjectionInput {
     },
     checkpoints: [checkpoint("capacity-1", item, "10", "10", "0", "0")],
     movements,
+    policies: [policy()],
     capacities: [capacity("capacity-1", item, "10", "2", "3")],
     attempts: rows.map((row) => row.attempt),
     holds: rows.map((row) => row.hold),
@@ -497,6 +543,127 @@ describe("capacity ledger projector", () => {
     })
   })
 
+  it("fails a pre-activation non-null ledger binding closed", () => {
+    const input = baseInput()
+    const result = reconcileCapacityLedgerProjection({
+      ...input,
+      control: null,
+      checkpoints: [],
+      movements: [],
+    })
+    expect(result).toMatchObject({
+      status: "manual_required",
+      classification: "manual_required",
+      issues: [
+        { code: LedgerReconciliationIssueCode.ATTEMPT_BINDING_MISMATCH },
+      ],
+    })
+  })
+
+  it.each([
+    [
+      "a soft-deleted Policy",
+      (input: LedgerProjectionInput): LedgerProjectionInput => ({
+        ...input,
+        policies: [{ ...input.policies[0], deleted_at: "2026-09-21T00:00:00Z" }],
+      }),
+    ],
+    [
+      "an orphan Capacity Policy reference",
+      (input: LedgerProjectionInput): LedgerProjectionInput => ({
+        ...input,
+        capacities: [
+          { ...input.capacities[0], allocation_policy_id: "missing-policy" },
+        ],
+      }),
+    ],
+    [
+      "an Attempt crossing Policy/Campaign identity",
+      (input: LedgerProjectionInput): LedgerProjectionInput => ({
+        ...input,
+        policies: [...input.policies, policy("policy-2", "campaign-2")],
+        attempts: [
+          {
+            ...input.attempts[0],
+            allocation_policy_id: "policy-2",
+            campaign_id: "campaign-2",
+          },
+          ...input.attempts.slice(1),
+        ],
+      }),
+    ],
+  ])("fails %s closed", (_, mutate) => {
+    const result = reconcileCapacityLedgerProjection(mutate(baseInput()))
+    expect(result.status).toBe("manual_required")
+    expect(result.classification).toBe("manual_required")
+  })
+
+  it("rejects a Policy without any physical Capacity", () => {
+    const input = baseInput()
+    const result = reconcileCapacityLedgerProjection({
+      ...input,
+      policies: [...input.policies, policy("orphan-policy", "orphan-campaign")],
+    })
+    expect(result).toMatchObject({
+      status: "manual_required",
+      classification: "manual_required",
+      issues: [
+        { code: LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH },
+      ],
+    })
+  })
+
+  it("rejects Policy/Capacity state mismatch before drift classification", () => {
+    const input = baseInput()
+    const result = reconcileCapacityLedgerProjection({
+      ...input,
+      policies: [{ ...input.policies[0], state: "open" }],
+      capacities: [
+        {
+          ...input.capacities[0],
+          state: CapacityState.CLOSED,
+          held_quantity: "1",
+          raw_held_quantity: raw("1"),
+        },
+      ],
+      repair_scope: "non_open",
+    })
+    expect(result).toMatchObject({
+      status: "manual_required",
+      classification: "manual_required",
+      issues: [
+        { code: LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH },
+      ],
+    })
+  })
+
+  it.each(["unknown-policy-state", ""])(
+    "rejects invalid Policy state %p",
+    (state) => {
+      const input = baseInput()
+      const result = reconcileCapacityLedgerProjection({
+        ...input,
+        policies: [{ ...input.policies[0], state }],
+      })
+      expect(result.status).toBe("manual_required")
+      expect(result.issues[0].code).toBe(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH
+      )
+    }
+  )
+
+  it("rejects an invalid Capacity state", () => {
+    const input = baseInput()
+    const result = reconcileCapacityLedgerProjection({
+      ...input,
+      capacities: [{ ...input.capacities[0], state: "invalid" }],
+    })
+    expect(result.status).toBe("manual_required")
+    expect(result.issues[0].code).toBe(
+      LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH
+    )
+  })
+
   it("classifies held/consumed/raw-only drift as safe only outside OPEN", () => {
     const input = baseInput()
     const drifted: LedgerCapacityEntity = {
@@ -666,10 +833,10 @@ describe("capacity ledger projector", () => {
         version: attemptVersion,
       }
       const movements = [...input.movements]
-      movements[movementIndex] = {
-        ...movements[movementIndex],
-        transition_version: movementVersion,
-      }
+      movements[movementIndex] = withTransitionVersion(
+        movements[movementIndex],
+        movementVersion
+      )
       const result = reconcileCapacityLedgerProjection({
         ...input,
         attempts,

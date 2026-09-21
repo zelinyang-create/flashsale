@@ -1,4 +1,11 @@
-import { AllocationItemInput, NormalizedAllocationItem } from "../domain"
+import {
+  AllocationItemInput,
+  LedgerIssueClassification,
+  LedgerReconciliationIssue,
+  LedgerReconciliationStatus,
+  NormalizedAllocationItem,
+  ProjectedCapacityCounters,
+} from "../domain"
 import {
   AllocationFenceDisposition,
   AllocationOutboxStatus,
@@ -410,6 +417,45 @@ export interface AllocationReconciliationStore {
     input: Required<Pick<ReconcileAllocationCommand, "sample_limit">> &
       Pick<ReconcileAllocationCommand, "campaign_id">
   ): Promise<ReconcileAllocationResult>
+}
+
+export const DEFAULT_MOVEMENT_LEDGER_SAMPLE_LIMIT = 20
+export const MAX_MOVEMENT_LEDGER_SAMPLE_LIMIT = 100
+export const DEFAULT_MOVEMENT_LEDGER_STATEMENT_TIMEOUT_MS = 5_000
+export const MAX_MOVEMENT_LEDGER_STATEMENT_TIMEOUT_MS = 30_000
+export const DEFAULT_MOVEMENT_LEDGER_BATCH_SIZE = 500
+export const MAX_MOVEMENT_LEDGER_BATCH_SIZE = 5_000
+
+export type ReconcileMovementLedgerCommand = Readonly<{
+  campaign_id?: string
+  sample_limit?: number
+  statement_timeout_ms?: number
+  batch_size?: number
+}>
+
+export type PreparedReconcileMovementLedgerCommand = Readonly<{
+  campaign_id?: string
+  sample_limit: number
+  statement_timeout_ms: number
+  batch_size: number
+}>
+
+export type ReconcileMovementLedgerResult = Readonly<{
+  domain: "movement_ledger"
+  snapshot_at: Date
+  scope: Readonly<{ campaign_id: string | null }>
+  status: LedgerReconciliationStatus
+  classification: LedgerIssueClassification | null
+  issue_count: number
+  issues: readonly LedgerReconciliationIssue[]
+  expected_capacities: readonly ProjectedCapacityCounters[]
+  subject_counter_derivation: "not_ledger_derived"
+}>
+
+export interface MovementLedgerReconciliationStore {
+  reconcileMovementLedger(
+    input: PreparedReconcileMovementLedgerCommand
+  ): Promise<ReconcileMovementLedgerResult>
 }
 
 export interface AllocationStore

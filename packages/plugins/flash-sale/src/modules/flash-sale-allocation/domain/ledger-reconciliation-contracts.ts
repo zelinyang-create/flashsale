@@ -37,6 +37,7 @@ export enum LedgerReconciliationIssueCode {
   CONSUMED_QUANTITY_DRIFT = "consumed_quantity_drift",
   RAW_GRANTED_MIRROR_DRIFT = "raw_granted_mirror_drift",
   RAW_MIRROR_DRIFT = "raw_mirror_drift",
+  SCOPE_NOT_FOUND = "scope_not_found",
 }
 
 export type LedgerDecimalMirror =
@@ -84,11 +85,13 @@ export type LedgerMovementEntity = Readonly<{
   to_bucket: CapacityMovementBucket | string
   quantity: string
   raw_quantity: LedgerDecimalMirror
+  fence_token: string
   deleted_at: string | null
 }>
 
 export type LedgerCapacityEntity = Readonly<{
   id: string
+  allocation_policy_id: string
   campaign_item_id: string
   shard_no: string
   state: CapacityState | string
@@ -103,6 +106,7 @@ export type LedgerCapacityEntity = Readonly<{
 
 export type LedgerAttemptEntity = Readonly<{
   id: string
+  allocation_policy_id: string
   campaign_id: string
   subject_id: string
   state: PurchaseAttemptState | string
@@ -110,6 +114,13 @@ export type LedgerAttemptEntity = Readonly<{
   settlement_id: string | null
   hold_movement_activation_id: string | null
   terminal_movement_activation_id: string | null
+  deleted_at: string | null
+}>
+
+export type LedgerPolicyEntity = Readonly<{
+  id: string
+  campaign_id: string
+  state: string
   deleted_at: string | null
 }>
 
@@ -135,6 +146,7 @@ export type LedgerProjectionInput = Readonly<{
   control: LedgerControlEntity | null
   checkpoints: readonly LedgerCheckpointEntity[]
   movements: readonly LedgerMovementEntity[]
+  policies: readonly LedgerPolicyEntity[]
   capacities: readonly LedgerCapacityEntity[]
   attempts: readonly LedgerAttemptEntity[]
   holds: readonly LedgerHoldEntity[]

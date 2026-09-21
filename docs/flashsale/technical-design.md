@@ -1439,9 +1439,21 @@ manual-required 边界。Capacity materialized counters 仍是在线权威；Che
 全部物理行、Attempt bindings 与 Hold facts 同时验证通过后才是 Capacity counter 重建证据；Subject counter
 不从该 Ledger 派生。详见 ADR-0013。
 
-**Phase 2A-3a 不包含数据库 Reconcile/Rebuild/Repair。** 当前没有数据库 Reader、Repair Writer、自动改数、
-Ledger 行补造/删除/恢复或生产修复门禁；这些仍属于后续 Phase 2A-3b/3c，不得把纯函数通过表述为数据库
-恢复能力已经交付。
+Phase 2A-3b 已完成独立的只读 PostgreSQL Ledger Reconciliation：单一 `REPEATABLE READ READ ONLY` 快照内
+读取全部物理 Ledger 证据与相关业务事实；campaign scope 仍先执行全局 Control/Checkpoint root 和
+Capacity↔Checkpoint 覆盖门禁；numeric/raw 全程无损映射，并使用 3a Projector 输出独立
+`movement_ledger` 域结果。命令对 statement timeout、keyset batch 与输出 sample 有硬边界。现有主键索引已
+支持物理全集 keyset 扫描，且 soft-deleted 行不能被 partial index 排除，因此本阶段不新增 migration。
+首批 keyset scan 不设置字符串下界，后续才使用 nullable cursor，确保包括异常空字符串主键。Policy、
+Capacity、Attempt、Hold 和 Movement 的 Policy/Campaign identity 必须完整闭合；未激活状态也必须扫描
+Attempt/Hold，残留 binding、soft-delete 或 orphan 证据均 fail closed。不存在的 campaign scope 在完成全局
+gate 后返回 `SCOPE_NOT_FOUND/manual_required`，不会返回空 healthy。
+每个 Policy 必须至少覆盖一个 Capacity，Policy/Capacity state 必须合法且一致；任一侧为 OPEN 时 repair
+scope 均按 OPEN 处理。孤立 Policy 既不能通过全局 Projector，也不能伪造 campaign scope。
+
+**Phase 2A-3b 只交付只读审计，不包含 Rebuild/Repair。** 当前没有 Repair Writer、自动改数、Ledger 行补造/
+删除/恢复、scheduled repair、修复审计表或生产修复门禁；这些仍属于后续 Phase 2A-3c，不得把 audit healthy
+表述为自动恢复能力已经交付，也不得覆盖 Phase 1 reconciliation 的独立语义。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

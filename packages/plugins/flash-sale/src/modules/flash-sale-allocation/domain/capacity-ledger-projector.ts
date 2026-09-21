@@ -1,8 +1,10 @@
 import {
+  AllocationPolicyState,
   AllocationHoldState,
   CapacityMovementBucket,
   CapacityMovementCheckpointKind,
   CapacityMovementKind,
+  CapacityState,
   PurchaseAttemptState,
 } from "../../../types"
 import {
@@ -13,12 +15,14 @@ import {
   LedgerHoldEntity,
   LedgerIssueClassification,
   LedgerMovementEntity,
+  LedgerPolicyEntity,
   LedgerProjectionInput,
   LedgerReconciliationIssue,
   LedgerReconciliationIssueCode,
   LedgerReconciliationResult,
   ProjectedCapacityCounters,
 } from "./ledger-reconciliation-contracts"
+import { validateCapacityMovement } from "./capacity-movement"
 
 const DECIMAL = /^(0|[1-9][0-9]*)$/
 const POSITIVE_DECIMAL = /^[1-9][0-9]*$/
@@ -154,6 +158,15 @@ function assertLive(entity: { deleted_at: string | null }, name: string): void {
   }
 }
 
+function assertIdentity(value: string, field: string): void {
+  if (typeof value !== "string" || value.length < 1 || value.length > 255) {
+    fail(
+      LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+      `${field} must be a bounded non-empty identifier`
+    )
+  }
+}
+
 function movementIdentity(movement: LedgerMovementEntity): string {
   return `${movement.attempt_id}\u0000${movement.campaign_item_id}\u0000${movement.transition_version}`
 }
@@ -245,15 +258,27 @@ function validateFacts(
   movements: readonly LedgerMovementEntity[],
   attempts: readonly LedgerAttemptEntity[],
   holds: readonly LedgerHoldEntity[],
-  capacityById: ReadonlyMap<string, LedgerCapacityEntity>
+  capacityById: ReadonlyMap<string, LedgerCapacityEntity>,
+  policyById: ReadonlyMap<string, LedgerPolicyEntity>
 ): void {
   const attemptById = new Map<string, LedgerAttemptEntity>()
   for (const attempt of attempts) {
     assertLive(attempt, "attempt evidence")
+    assertIdentity(attempt.id, "attempt.id")
+    assertIdentity(attempt.allocation_policy_id, "attempt.allocation_policy_id")
+    assertIdentity(attempt.campaign_id, "attempt.campaign_id")
+    assertIdentity(attempt.subject_id, "attempt.subject_id")
     if (attemptById.has(attempt.id)) {
       fail(
         LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
         `duplicate attempt fact ${attempt.id}`
+      )
+    }
+    const policy = policyById.get(attempt.allocation_policy_id)
+    if (!policy || policy.campaign_id !== attempt.campaign_id) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Attempt ${attempt.id} does not identify a live Policy/Campaign`
       )
     }
     attemptById.set(attempt.id, attempt)
@@ -282,10 +307,16 @@ function validateFacts(
     }).toString(10)
     assertMirror(hold.raw_quantity, quantity, "hold.raw_quantity", hold.capacity_id)
     const capacity = capacityById.get(hold.capacity_id)
-    if (!capacity || capacity.campaign_item_id !== hold.campaign_item_id) {
+    const attempt = attemptById.get(hold.attempt_id)
+    if (
+      !capacity ||
+      !attempt ||
+      capacity.campaign_item_id !== hold.campaign_item_id ||
+      capacity.allocation_policy_id !== attempt.allocation_policy_id
+    ) {
       fail(
         LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
-        `hold ${hold.id} does not identify a loaded Capacity`,
+        `hold ${hold.id} does not identify one Attempt Policy/Capacity`,
         hold.capacity_id
       )
     }
@@ -308,6 +339,10 @@ function validateFacts(
     }
     movementByFact.set(factKey, movement)
     const attempt = attemptById.get(movement.attempt_id)
+    const capacity = capacityById.get(movement.capacity_id)
+    const policy = capacity
+      ? policyById.get(capacity.allocation_policy_id)
+      : undefined
     const hold = holdByAttemptItem.get(
       `${movement.attempt_id}\u0000${movement.campaign_item_id}`
     )
@@ -315,6 +350,8 @@ function validateFacts(
       !attempt ||
       !hold ||
       hold.capacity_id !== movement.capacity_id ||
+      capacity?.allocation_policy_id !== attempt.allocation_policy_id ||
+      policy?.campaign_id !== movement.campaign_id ||
       attempt.campaign_id !== movement.campaign_id ||
       attempt.subject_id !== movement.subject_id ||
       hold.quantity !== movement.quantity
@@ -558,6 +595,84 @@ function validateCheckpoint(
   return [granted, available, held, consumed]
 }
 
+function buildFactMaps(input: LedgerProjectionInput): Readonly<{
+  policyById: ReadonlyMap<string, LedgerPolicyEntity>
+  capacityById: ReadonlyMap<string, LedgerCapacityEntity>
+}> {
+  const policyById = new Map<string, LedgerPolicyEntity>()
+  const validPolicyStates = new Set<string>(Object.values(AllocationPolicyState))
+  const validCapacityStates = new Set<string>(Object.values(CapacityState))
+  for (const policy of input.policies) {
+    assertLive(policy, "policy evidence")
+    assertIdentity(policy.id, "policy.id")
+    assertIdentity(policy.campaign_id, "policy.campaign_id")
+    if (!validPolicyStates.has(policy.state)) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Policy ${policy.id} has an unsupported state`
+      )
+    }
+    if (policyById.has(policy.id)) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `duplicate Policy ${policy.id}`
+      )
+    }
+    policyById.set(policy.id, policy)
+  }
+  const capacityById = new Map<string, LedgerCapacityEntity>()
+  const policyCapacityCounts = new Map<string, number>()
+  for (const capacity of input.capacities) {
+    assertLive(capacity, "capacity evidence")
+    assertIdentity(capacity.id, "capacity.id")
+    assertIdentity(capacity.allocation_policy_id, "capacity.allocation_policy_id")
+    assertIdentity(capacity.campaign_item_id, "capacity.campaign_item_id")
+    if (!validCapacityStates.has(capacity.state)) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Capacity ${capacity.id} has an unsupported state`,
+        capacity.id
+      )
+    }
+    const policy = policyById.get(capacity.allocation_policy_id)
+    if (!policy) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Capacity ${capacity.id} has no live Policy`,
+        capacity.id
+      )
+    }
+    if (capacity.state !== policy.state) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Capacity ${capacity.id} state disagrees with Policy ${policy.id}`,
+        capacity.id
+      )
+    }
+    if (capacityById.has(capacity.id)) {
+      fail(
+        LedgerReconciliationIssueCode.CHECKPOINT_IDENTITY_MISMATCH,
+        `duplicate Capacity ${capacity.id}`,
+        capacity.id
+      )
+    }
+    capacityById.set(capacity.id, capacity)
+    policyCapacityCounts.set(
+      policy.id,
+      (policyCapacityCounts.get(policy.id) ?? 0) + 1
+    )
+  }
+  for (const policy of policyById.values()) {
+    if (!policyCapacityCounts.has(policy.id)) {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `Policy ${policy.id} has no physical Capacity`
+      )
+    }
+  }
+  return { policyById, capacityById }
+}
+
 export function projectVerifiedCapacityLedger(
   input: LedgerProjectionInput
 ): readonly ProjectedCapacityCounters[] {
@@ -575,17 +690,16 @@ export function projectVerifiedCapacityLedger(
       `unsupported Control root schema ${control.schema_version}`
     )
   }
-  const capacityById = new Map<string, LedgerCapacityEntity>()
-  for (const capacity of input.capacities) {
-    assertLive(capacity, "capacity evidence")
-    if (capacityById.has(capacity.id)) {
-      fail(
-        LedgerReconciliationIssueCode.CHECKPOINT_IDENTITY_MISMATCH,
-        `duplicate Capacity ${capacity.id}`,
-        capacity.id
-      )
-    }
-    capacityById.set(capacity.id, capacity)
+  const { policyById, capacityById } = buildFactMaps(input)
+  if (
+    input.repair_scope !== "open" &&
+    (input.policies.some((row) => row.state === AllocationPolicyState.OPEN) ||
+      input.capacities.some((row) => row.state === CapacityState.OPEN))
+  ) {
+    fail(
+      LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+      "repair scope cannot be non-OPEN while Policy or Capacity is OPEN"
+    )
   }
   const checkpointByCapacity = new Map<string, LedgerCheckpointEntity>()
   for (const checkpoint of input.checkpoints) {
@@ -658,13 +772,36 @@ export function projectVerifiedCapacityLedger(
       "movement.raw_quantity",
       movement.capacity_id
     )
+    try {
+      validateCapacityMovement({
+        schema_version: 1,
+        capacity_id: movement.capacity_id,
+        attempt_id: movement.attempt_id,
+        campaign_id: movement.campaign_id,
+        subject_id: movement.subject_id,
+        campaign_item_id: movement.campaign_item_id,
+        transition_version: Number(BigInt(movement.transition_version)),
+        kind: movement.kind as CapacityMovementKind,
+        from_bucket: movement.from_bucket as CapacityMovementBucket,
+        to_bucket: movement.to_bucket as CapacityMovementBucket,
+        quantity,
+        fence_token: movement.fence_token,
+      })
+    } catch {
+      fail(
+        LedgerReconciliationIssueCode.LEDGER_FACT_MISMATCH,
+        `movement ${movement.id} fingerprint does not match its immutable tuple`,
+        movement.capacity_id
+      )
+    }
   }
   validateFacts(
     control.activation_id,
     input.movements,
     input.attempts,
     input.holds,
-    capacityById
+    capacityById,
+    policyById
   )
 
   return [...capacityById.values()]
@@ -754,6 +891,29 @@ export function reconcileCapacityLedgerProjection(
           "physical ledger rows exist without an activation Control"
         ),
       ])
+    }
+    try {
+      const { policyById, capacityById } = buildFactMaps(input)
+      validateFacts(
+        "",
+        [],
+        input.attempts,
+        input.holds,
+        capacityById,
+        policyById
+      )
+    } catch (error) {
+      if (error instanceof LedgerProjectionError) {
+        return manualResult([
+          issue(
+            error.code,
+            "manual_required",
+            error.message,
+            error.capacityId
+          ),
+        ])
+      }
+      throw error
     }
     return Object.freeze({
       status: "not_activated",

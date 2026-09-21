@@ -50,6 +50,9 @@ import {
   ActivateAllocationMovementLedgerCommand,
   ActivateAllocationMovementLedgerHandler,
   ActivateAllocationMovementLedgerResult,
+  ReconcileMovementLedgerCommand,
+  ReconcileMovementLedgerHandler,
+  ReconcileMovementLedgerResult,
 } from "./application"
 import {
   AllocationCampaignFence,
@@ -69,6 +72,7 @@ import {
   PostgresAllocationOutboxStore,
   PostgresAllocationReconciliationStore,
   PostgresCapacityMovementLedgerStore,
+  PostgresMovementLedgerReconciliationStore,
 } from "./persistence"
 
 type InjectedDependencies = {
@@ -112,6 +116,7 @@ class FlashSaleAllocationModuleService extends MedusaService({
   private readonly failAllocationOutboxEventHandler_: FailAllocationOutboxEventHandler
   private readonly redriveAllocationOutboxEventHandler_: RedriveAllocationOutboxEventHandler
   private readonly activateAllocationMovementLedgerHandler_: ActivateAllocationMovementLedgerHandler
+  private readonly reconcileMovementLedgerHandler_: ReconcileMovementLedgerHandler
 
   constructor({ baseRepository }: InjectedDependencies) {
     super(...arguments)
@@ -156,6 +161,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
       new ActivateAllocationMovementLedgerHandler(
         new PostgresCapacityMovementLedgerStore(baseRepository)
       )
+    this.reconcileMovementLedgerHandler_ = new ReconcileMovementLedgerHandler(
+      new PostgresMovementLedgerReconciliationStore(baseRepository)
+    )
   }
 
   async claimAttempt(
@@ -242,6 +250,12 @@ class FlashSaleAllocationModuleService extends MedusaService({
     command: ReconcileAllocationCommand
   ): Promise<ReconcileAllocationResult> {
     return await this.reconcileAllocationHandler_.execute(command)
+  }
+
+  async reconcileMovementLedger(
+    command: ReconcileMovementLedgerCommand
+  ): Promise<ReconcileMovementLedgerResult> {
+    return await this.reconcileMovementLedgerHandler_.execute(command)
   }
 
   async activateAllocationOutbox(
