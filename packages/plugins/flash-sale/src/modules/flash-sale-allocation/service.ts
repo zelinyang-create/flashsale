@@ -53,6 +53,9 @@ import {
   ReconcileMovementLedgerCommand,
   ReconcileMovementLedgerHandler,
   ReconcileMovementLedgerResult,
+  DryRunCapacityRepairCommand,
+  DryRunCapacityRepairHandler,
+  DryRunCapacityRepairResult,
 } from "./application"
 import {
   AllocationCampaignFence,
@@ -61,6 +64,9 @@ import {
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityRepairAction,
+  CapacityRepairIdentity,
+  CapacityRepairRun,
   CapacityMovement,
   CapacityMovementCheckpoint,
   CapacityMovementControl,
@@ -73,6 +79,7 @@ import {
   PostgresAllocationReconciliationStore,
   PostgresCapacityMovementLedgerStore,
   PostgresMovementLedgerReconciliationStore,
+  PostgresCapacityRepairPlanStore,
 } from "./persistence"
 
 type InjectedDependencies = {
@@ -88,6 +95,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
   AllocationOutboxEvent,
   AllocationPolicy,
   Capacity,
+  CapacityRepairAction,
+  CapacityRepairIdentity,
+  CapacityRepairRun,
   CapacityMovement,
   CapacityMovementCheckpoint,
   CapacityMovementControl,
@@ -117,6 +127,7 @@ class FlashSaleAllocationModuleService extends MedusaService({
   private readonly redriveAllocationOutboxEventHandler_: RedriveAllocationOutboxEventHandler
   private readonly activateAllocationMovementLedgerHandler_: ActivateAllocationMovementLedgerHandler
   private readonly reconcileMovementLedgerHandler_: ReconcileMovementLedgerHandler
+  private readonly dryRunCapacityRepairHandler_: DryRunCapacityRepairHandler
 
   constructor({ baseRepository }: InjectedDependencies) {
     super(...arguments)
@@ -163,6 +174,9 @@ class FlashSaleAllocationModuleService extends MedusaService({
       )
     this.reconcileMovementLedgerHandler_ = new ReconcileMovementLedgerHandler(
       new PostgresMovementLedgerReconciliationStore(baseRepository)
+    )
+    this.dryRunCapacityRepairHandler_ = new DryRunCapacityRepairHandler(
+      new PostgresCapacityRepairPlanStore(baseRepository)
     )
   }
 
@@ -256,6 +270,12 @@ class FlashSaleAllocationModuleService extends MedusaService({
     command: ReconcileMovementLedgerCommand
   ): Promise<ReconcileMovementLedgerResult> {
     return await this.reconcileMovementLedgerHandler_.execute(command)
+  }
+
+  async dryRunCapacityRepair(
+    command: DryRunCapacityRepairCommand
+  ): Promise<DryRunCapacityRepairResult> {
+    return await this.dryRunCapacityRepairHandler_.execute(command)
   }
 
   async activateAllocationOutbox(
@@ -617,6 +637,93 @@ class FlashSaleAllocationModuleService extends MedusaService({
 
   // @ts-expect-error The generated Medusa write method is intentionally disabled.
   async restoreCapacityMovementControls(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async createCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async updateCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async deleteCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async softDeleteCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async restoreCapacityRepairRuns(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async createCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async updateCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async deleteCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async softDeleteCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async restoreCapacityRepairActions(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async createCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async updateCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  async upsertCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async deleteCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async softDeleteCapacityRepairIdentities(): Promise<never> {
+    return this.rejectDirectWrite()
+  }
+
+  // @ts-expect-error Generated audit writes are intentionally disabled.
+  async restoreCapacityRepairIdentities(): Promise<never> {
     return this.rejectDirectWrite()
   }
 }

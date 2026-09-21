@@ -38,7 +38,29 @@ type SnapshotRow = {
 }
 
 export type MovementLedgerReconciliationObserver = Readonly<{
+  beforeSnapshot?: (manager: SqlEntityManager) => Promise<void>
   snapshotEstablished?: (manager: SqlEntityManager) => Promise<void>
+  resultComputed?: (
+    manager: SqlEntityManager,
+    result: ReconcileMovementLedgerResult,
+    complete: MovementLedgerReconciliationEvidence
+  ) => Promise<void>
+}>
+
+export type MovementLedgerPhysicalManifest = Readonly<{
+  schema: "movement-ledger-physical-manifest-v1"
+  controls: readonly ControlRow[]
+  checkpoints: readonly CheckpointRow[]
+  movements: readonly LedgerMovementEntity[]
+  policies: readonly LedgerPolicyEntity[]
+  capacities: readonly CapacityRow[]
+  attempts: readonly LedgerAttemptEntity[]
+  holds: readonly LedgerHoldEntity[]
+}>
+
+export type MovementLedgerReconciliationEvidence = Readonly<{
+  full_result: LedgerReconciliationResult
+  physical_manifest: MovementLedgerPhysicalManifest
 }>
 
 const DRIFT_CODES = new Set<LedgerReconciliationIssueCode>([
@@ -101,20 +123,6 @@ function domainResult(
     ),
     subject_counter_derivation: "not_ledger_derived",
   }
-}
-
-function manualResult(
-  snapshotAt: Date,
-  input: PreparedReconcileMovementLedgerCommand,
-  issue: LedgerReconciliationIssue
-): ReconcileMovementLedgerResult {
-  return domainResult(snapshotAt, input, {
-    status: "manual_required",
-    classification: "manual_required",
-    expected_capacities: [],
-    issues: [issue],
-    subject_counter_derivation: "not_ledger_derived",
-  })
 }
 
 function verifyPhysicalRootCoverage(
@@ -214,20 +222,31 @@ export class PostgresMovementLedgerReconciliationStore
 {
   constructor(
     private readonly baseRepository: DAL.RepositoryService,
-    private readonly observer?: MovementLedgerReconciliationObserver
+    private readonly observer?: MovementLedgerReconciliationObserver,
+    private readonly transactionMode: "read_only" | "repair_plan" = "read_only"
   ) {}
 
   async reconcileMovementLedger(
     input: PreparedReconcileMovementLedgerCommand
   ): Promise<ReconcileMovementLedgerResult> {
     return await this.baseRepository.transaction<SqlEntityManager>(
-      async (manager) => {
-        await manager.execute(
-          "set transaction isolation level repeatable read read only"
+      async (manager) => await this.reconcileInTransaction(manager, input)
+    )
+  }
+
+  async reconcileInTransaction(
+    manager: SqlEntityManager,
+    input: PreparedReconcileMovementLedgerCommand
+  ): Promise<ReconcileMovementLedgerResult> {
+    await manager.execute(
+          this.transactionMode === "read_only"
+            ? "set transaction isolation level repeatable read read only"
+            : "set transaction isolation level repeatable read"
         )
         await manager.execute(
           `set local statement_timeout = '${input.statement_timeout_ms}ms'`
         )
+        await this.observer?.beforeSnapshot?.(manager)
         const snapshots = (await manager.execute(
           `select transaction_timestamp() as snapshot_at,
                   current_setting('transaction_isolation') as isolation_level,
@@ -238,15 +257,20 @@ export class PostgresMovementLedgerReconciliationStore
         if (
           !snapshot ||
           snapshot.isolation_level !== "repeatable read" ||
-          snapshot.read_only !== "on"
+          snapshot.read_only !==
+            (this.transactionMode === "read_only" ? "on" : "off")
         ) {
           throw new MedusaError(
             MedusaError.Types.UNEXPECTED_STATE,
-            "Movement Ledger reconciliation requires a read-only repeatable-read snapshot"
+            this.transactionMode === "read_only"
+              ? "Movement Ledger reconciliation requires a read-only repeatable-read snapshot"
+              : "Capacity repair planning requires a writable repeatable-read snapshot"
           )
         }
         const snapshotAt = new Date(snapshot.snapshot_at)
         await this.observer?.snapshotEstablished?.(manager)
+        let completeEvidence: MovementLedgerReconciliationEvidence | undefined
+        const result = await (async (): Promise<ReconcileMovementLedgerResult> => {
 
         const controls = await readBatches<ControlRow>(
           manager,
@@ -377,6 +401,35 @@ export class PostgresMovementLedgerReconciliationStore
           },
           repair_scope: repairScope(policies, capacities),
         }
+        const physicalManifest: MovementLedgerPhysicalManifest = {
+          schema: "movement-ledger-physical-manifest-v1",
+          controls,
+          checkpoints,
+          movements,
+          policies,
+          capacities,
+          attempts,
+          holds,
+        }
+        const complete = (
+          domain: LedgerReconciliationResult
+        ): ReconcileMovementLedgerResult => {
+          completeEvidence = {
+            full_result: domain,
+            physical_manifest: physicalManifest,
+          }
+          return domainResult(snapshotAt, input, domain)
+        }
+        const completeManual = (
+          issue: LedgerReconciliationIssue
+        ): ReconcileMovementLedgerResult =>
+          complete({
+            status: "manual_required",
+            classification: "manual_required",
+            expected_capacities: [],
+            issues: [issue],
+            subject_counter_derivation: "not_ledger_derived",
+          })
         const requestedScopePolicyIds = new Set(
           policies
             .filter((policy) => policy.campaign_id === input.campaign_id)
@@ -391,28 +444,24 @@ export class PostgresMovementLedgerReconciliationStore
         if (controls.length === 0) {
           const unactivated = reconcileCapacityLedgerProjection(baseInput)
           if (unactivated.status === "manual_required") {
-            return domainResult(snapshotAt, input, unactivated)
+            return complete(unactivated)
           }
           if (!scopeExists) {
-            return manualResult(
-              snapshotAt,
-              input,
+            return completeManual(
               manualIssue(
                 LedgerReconciliationIssueCode.SCOPE_NOT_FOUND,
                 `campaign scope ${input.campaign_id} has no physical Policy`
               )
             )
           }
-          return domainResult(snapshotAt, input, unactivated)
+          return complete(unactivated)
         }
         if (
           controls.length !== 1 ||
           controls[0].id !== ALLOCATION_MOVEMENT_LEDGER_CONTROL_ID ||
           controls[0].deleted_at !== null
         ) {
-          return manualResult(
-            snapshotAt,
-            input,
+          return completeManual(
             manualIssue(
               controls.some((row) => row.deleted_at !== null)
                 ? LedgerReconciliationIssueCode.SOFT_DELETED_EVIDENCE
@@ -423,9 +472,7 @@ export class PostgresMovementLedgerReconciliationStore
         }
         const control = controls[0]
         if (control.schema_version !== "1" && control.schema_version !== "2") {
-          return manualResult(
-            snapshotAt,
-            input,
+          return completeManual(
             manualIssue(
               LedgerReconciliationIssueCode.UNKNOWN_CONTROL_SCHEMA,
               `unknown Control root schema ${control.schema_version}`
@@ -433,13 +480,11 @@ export class PostgresMovementLedgerReconciliationStore
           )
         }
         const coverageIssue = verifyPhysicalRootCoverage(capacities, checkpoints)
-        if (coverageIssue) return manualResult(snapshotAt, input, coverageIssue)
+        if (coverageIssue) return completeManual(coverageIssue)
         try {
           verifyMovementCheckpointRoot(checkpoints, control)
         } catch {
-          return manualResult(
-            snapshotAt,
-            input,
+          return completeManual(
             manualIssue(
               LedgerReconciliationIssueCode.CHECKPOINT_ROOT_UNVERIFIED,
               "Checkpoint canonical root verification failed"
@@ -463,7 +508,7 @@ export class PostgresMovementLedgerReconciliationStore
           (issue) => !DRIFT_CODES.has(issue.code)
         )
         if (globalIntegrityIssues.length > 0) {
-          return domainResult(snapshotAt, input, {
+          return complete({
             status: "manual_required",
             classification: "manual_required",
             expected_capacities: [],
@@ -472,9 +517,7 @@ export class PostgresMovementLedgerReconciliationStore
           })
         }
         if (!scopeExists) {
-          return manualResult(
-            snapshotAt,
-            input,
+          return completeManual(
             manualIssue(
               LedgerReconciliationIssueCode.SCOPE_NOT_FOUND,
               `campaign scope ${input.campaign_id} has no physical Policy`
@@ -486,8 +529,15 @@ export class PostgresMovementLedgerReconciliationStore
               scopedInput(input, all, capacities, policies)
             )
           : global
-        return domainResult(snapshotAt, input, scoped)
-      }
-    )
+        return complete(scoped)
+        })()
+        if (!completeEvidence) {
+          throw new MedusaError(
+            MedusaError.Types.UNEXPECTED_STATE,
+            "Movement Ledger reconciliation produced no complete evidence"
+          )
+        }
+        await this.observer?.resultComputed?.(manager, result, completeEvidence)
+    return result
   }
 }

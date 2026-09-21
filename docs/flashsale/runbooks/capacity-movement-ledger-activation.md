@@ -3,8 +3,23 @@
 ## 当前状态
 
 **仍禁止生产激活。** Phase 2A-2b 已通过独立 Node 进程、真实 `child.kill` 和 PostgreSQL rollback barrier
-证明关键 crash/race 窗口；但生产启用还必须完成 Phase 2A-3 Reconcile/Rebuild 交付，并确认全部实例都运行
+证明关键 crash/race 窗口；但生产启用还必须完成 Phase 2A-3d Apply/Rebuild 交付，并确认全部实例都运行
 同一 writer/binding 协议。不得仅凭 crash suite 通过就执行 `activateAllocationMovementLedger({})`。
+
+## Phase 2A-3c Repair Plan dry-run
+
+- dry-run 必须提供 request identity、actor、reason 与 ticket；只保存 identity SHA-256，不保存原始
+  idempotency key。
+- `planned` 仅表示已持久化 proposed Action，不表示 Counter 已修改；Capacity 与 Ledger 必须保持不变。
+- `manual_required` 与 `not_activated` 不生成可 apply Action，按 Run 的 root/issue/evidence digest 转人工。
+- 同一 identity 只接受 command 与 evidence 完全一致的 replay；漂移错误不得通过换 identity 绕过调查。
+- Plan 不受 3b 响应 `sample_limit` 截断；evidence manifest 包含完整七类物理证据以及完整 issue
+  manifest/count。独立 Identity registry 保留 request digest→Run 绑定，Run 硬删也必须报警。
+- Identity/Run/Action 是不可变审计证据，不得 soft-delete、restore、补造或改写；任一物理行存在时 migration down
+  都会 fail closed。
+- 相同 identity 先取得有界 session advisory lock，再在同一固定连接建立 RR snapshot；排障证据必须包含
+  advisory lock 精确 tuple 与 `pg_blocking_pids`，不能只凭 Promise 未完成判断并发。
+- 当前没有 Apply 命令。禁止直接执行 expected 值；等待 Phase 2A-3d 的锁内二次验证和 CAS。
 
 ## 激活前检查
 

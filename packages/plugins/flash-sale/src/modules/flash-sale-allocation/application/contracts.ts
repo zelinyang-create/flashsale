@@ -458,6 +458,59 @@ export interface MovementLedgerReconciliationStore {
   ): Promise<ReconcileMovementLedgerResult>
 }
 
+export type DryRunCapacityRepairCommand = Readonly<{
+  request_id?: string
+  idempotency_key?: string
+  campaign_id?: string
+  actor: string
+  reason: string
+  ticket: string
+  statement_timeout_ms?: number
+  batch_size?: number
+}>
+
+export type PreparedDryRunCapacityRepairCommand = Readonly<{
+  request_identity_digest: string
+  command_digest: string
+  campaign_id?: string
+  actor: string
+  reason: string
+  ticket: string
+  statement_timeout_ms: number
+  batch_size: number
+}>
+
+export type CapacityRepairPlanAction = Readonly<{
+  id: string
+  capacity_id: string
+  before_granted_quantity: string
+  before_held_quantity: string
+  before_consumed_quantity: string
+  expected_granted_quantity: string
+  expected_held_quantity: string
+  expected_consumed_quantity: string
+  issue_codes: readonly string[]
+  classification: "safe_repair"
+  status: "proposed"
+  evidence_digest: string
+}>
+
+export type DryRunCapacityRepairResult = Readonly<{
+  disposition: "fresh" | "replay"
+  run_id: string
+  status: "not_activated" | "no_changes" | "planned" | "manual_required"
+  classification: LedgerIssueClassification | null
+  evidence_digest: string
+  snapshot_at: Date
+  actions: readonly CapacityRepairPlanAction[]
+}>
+
+export interface CapacityRepairPlanStore {
+  dryRunCapacityRepair(
+    input: PreparedDryRunCapacityRepairCommand
+  ): Promise<DryRunCapacityRepairResult>
+}
+
 export interface AllocationStore
   extends AllocationQuotaStore,
     AllocationControlStore {}
@@ -510,6 +563,7 @@ export enum AllocationCommandErrorCode {
   OUTBOX_STATE_CONFLICT = "OUTBOX_STATE_CONFLICT",
   OUTBOX_INVARIANT_VIOLATION = "OUTBOX_INVARIANT_VIOLATION",
   MOVEMENT_LEDGER_INVARIANT_VIOLATION = "MOVEMENT_LEDGER_INVARIANT_VIOLATION",
+  REPAIR_PLAN_INVARIANT_VIOLATION = "REPAIR_PLAN_INVARIANT_VIOLATION",
 }
 
 export class AllocationCommandError extends Error {

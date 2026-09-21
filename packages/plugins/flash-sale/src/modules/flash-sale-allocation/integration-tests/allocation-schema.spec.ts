@@ -1,5 +1,6 @@
 import { MedusaError } from "@medusajs/framework/utils"
 import { moduleIntegrationTestRunner } from "@medusajs/test-utils"
+import { createHash } from "crypto"
 import path from "path"
 import {
   AllocationHoldState,
@@ -18,6 +19,9 @@ import {
   CapacityMovement,
   CapacityMovementCheckpoint,
   CapacityMovementControl,
+  CapacityRepairAction,
+  CapacityRepairIdentity,
+  CapacityRepairRun,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../models"
@@ -29,6 +33,7 @@ jest.setTimeout(60000)
 
 const HASH_A = "a".repeat(64)
 const HASH_B = "b".repeat(64)
+const digest = (value: string) => createHash("sha256").update(value).digest("hex")
 
 type Execute = (sql: string, params?: unknown[]) => Promise<unknown[]>
 
@@ -36,7 +41,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleName: FlashSalePluginModule.ALLOCATION,
   resolve: path.resolve(__dirname, ".."),
   cwd: path.resolve(__dirname, "../../../.."),
-  dbName: "medusa-flash-sale-allocation",
+  dbName: "medusa-flash-sale-allocation-3c-final-v2",
   moduleModels: [
     AllocationCampaignFence,
     AllocationOutboxControl,
@@ -46,6 +51,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     CapacityMovement,
     CapacityMovementCheckpoint,
     CapacityMovementControl,
+    CapacityRepairAction,
+    CapacityRepairIdentity,
+    CapacityRepairRun,
     PurchaseAttempt,
     AllocationHold,
     SubjectAllocation,
@@ -214,7 +222,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
     }
 
     describe("Flash-sale allocation schema", () => {
-      it("installs all eleven Allocation-owned tables from generated migrations", async () => {
+      it("installs all fourteen Allocation-owned tables from generated migrations", async () => {
         const rows = (await execute(
           `select tablename
              from pg_tables
@@ -233,6 +241,9 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "flash_sale_capacity_movement",
           "flash_sale_capacity_movement_checkpoint",
           "flash_sale_capacity_movement_control",
+          "flash_sale_capacity_repair_action",
+          "flash_sale_capacity_repair_identity",
+          "flash_sale_capacity_repair_run",
           "flash_sale_purchase_attempt",
           "flash_sale_subject_allocation",
         ])
@@ -263,6 +274,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "IDX_flash_sale_movement_checkpoint_activation_capacity_unique",
           "IDX_flash_sale_movement_checkpoint_route_unique",
           "IDX_flash_sale_movement_control_activation_unique",
+          "IDX_flash_sale_capacity_repair_identity_digest_unique",
+          "IDX_flash_sale_capacity_repair_identity_run_unique",
+          "IDX_flash_sale_capacity_repair_run_identity_unique",
+          "IDX_flash_sale_capacity_repair_action_run_capacity_unique",
         ]) {
           expect(definitions.get(index)).toContain("create unique index")
           expect(definitions.get(index)).not.toContain(" where ")
@@ -324,6 +339,10 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             target_table: "flash_sale_capacity",
           },
           {
+            source_table: "flash_sale_capacity_repair_action",
+            target_table: "flash_sale_capacity_repair_run",
+          },
+          {
             source_table: "flash_sale_purchase_attempt",
             target_table: "flash_sale_allocation_policy",
           },
@@ -331,6 +350,13 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
         expect(rows.some((row) => row.target_table.includes("campaign"))).toBe(
           false
         )
+        expect(
+          await execute(
+            `select update_rule, delete_rule
+               from information_schema.referential_constraints
+              where constraint_name = 'flash_sale_capacity_repair_action_run_id_foreign'`
+          )
+        ).toEqual([{ update_rule: "CASCADE", delete_rule: "NO ACTION" }])
       })
 
       it("rejects invalid policy and capacity invariants in PostgreSQL", async () => {
@@ -353,6 +379,68 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
             "policy-capacity",
             "item-overdrawn",
             { granted: 1, held: 1, consumed: 1 }
+          )
+        ).rejects.toThrow()
+      })
+
+      it("rejects inconsistent repair outcomes, issue counts, and empty Action issues", async () => {
+        const runInsert = async (
+          id: string,
+          status: string,
+          classification: string | null,
+          issueCount: number,
+          issueManifest: string
+        ) =>
+          await execute(
+            `insert into flash_sale_capacity_repair_run
+              (id, request_identity_digest, command_digest, status, classification,
+               actor, reason, ticket, evidence_digest, issue_codes, issue_count,
+               issue_manifest, evidence_manifest, snapshot_at, finished_at)
+             values (?, ?, ?, ?, ?, 'operator', 'schema check', 'INC-SCHEMA', ?,
+                     '["held_quantity_drift"]'::jsonb, ?, ?::jsonb,
+                     '{"schema":"test"}'::jsonb, now(), now())`,
+            [
+              id,
+              digest(`identity-${id}`),
+              digest(`command-${id}`),
+              status,
+              classification,
+              digest(`evidence-${id}`),
+              issueCount,
+              issueManifest,
+            ]
+          )
+
+        await expect(
+          runInsert("fsreprun_bad_outcome", "planned", null, 1, '[{"code":"x"}]')
+        ).rejects.toThrow()
+        await expect(
+          runInsert("fsreprun_bad_count", "not_activated", null, 1, "[]")
+        ).rejects.toThrow()
+
+        const runId = "fsreprun_action_check"
+        await runInsert(
+          runId,
+          "planned",
+          "safe_repair",
+          1,
+          '[{"code":"held_quantity_drift"}]'
+        )
+        await expect(
+          execute(
+            `insert into flash_sale_capacity_repair_action
+              (id, run_id, capacity_id, before_granted_quantity,
+               before_held_quantity, before_consumed_quantity,
+               before_raw_granted_quantity, before_raw_held_quantity,
+               before_raw_consumed_quantity, expected_granted_quantity,
+               expected_held_quantity, expected_consumed_quantity,
+               expected_raw_granted_quantity, expected_raw_held_quantity,
+               expected_raw_consumed_quantity, issue_codes, classification,
+               evidence_digest, status)
+             values ('fsrepact_empty_issues', ?, 'capacity-x',
+                     '1', '0', '0', '1', '0', '0', '1', '0', '0',
+                     '1', '0', '0', '[]'::jsonb, 'safe_repair', ?, 'proposed')`,
+            [runId, digest("action-empty-issues")]
           )
         ).rejects.toThrow()
       })
@@ -592,6 +680,24 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
           "deleteCapacityMovementControls",
           "softDeleteCapacityMovementControls",
           "restoreCapacityMovementControls",
+          "createCapacityRepairRuns",
+          "updateCapacityRepairRuns",
+          "upsertCapacityRepairRuns",
+          "deleteCapacityRepairRuns",
+          "softDeleteCapacityRepairRuns",
+          "restoreCapacityRepairRuns",
+          "createCapacityRepairActions",
+          "updateCapacityRepairActions",
+          "upsertCapacityRepairActions",
+          "deleteCapacityRepairActions",
+          "softDeleteCapacityRepairActions",
+          "restoreCapacityRepairActions",
+          "createCapacityRepairIdentities",
+          "updateCapacityRepairIdentities",
+          "upsertCapacityRepairIdentities",
+          "deleteCapacityRepairIdentities",
+          "softDeleteCapacityRepairIdentities",
+          "restoreCapacityRepairIdentities",
         ] as const
 
         for (const methodName of methodNames) {

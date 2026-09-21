@@ -1451,9 +1451,24 @@ gate 后返回 `SCOPE_NOT_FOUND/manual_required`，不会返回空 healthy。
 每个 Policy 必须至少覆盖一个 Capacity，Policy/Capacity state 必须合法且一致；任一侧为 OPEN 时 repair
 scope 均按 OPEN 处理。孤立 Policy 既不能通过全局 Projector，也不能伪造 campaign scope。
 
-**Phase 2A-3b 只交付只读审计，不包含 Rebuild/Repair。** 当前没有 Repair Writer、自动改数、Ledger 行补造/
-删除/恢复、scheduled repair、修复审计表或生产修复门禁；这些仍属于后续 Phase 2A-3c，不得把 audit healthy
-表述为自动恢复能力已经交付，也不得覆盖 Phase 1 reconciliation 的独立语义。
+**Phase 2A-3b 只交付只读审计，不包含 Repair Plan 或 Rebuild；Phase 2A-3c 已交付下述只写审计表的
+dry-run Plan。** 当前没有 Repair Apply Writer、自动改数、Ledger 行补造/删除/恢复、scheduled repair 或
+生产修复门禁；这些执行能力属于后续 Phase 2A-3d。不得把 audit healthy 或 dry-run planned 表述为自动
+恢复已经交付，也不得覆盖 Phase 1 reconciliation 的独立语义。
+
+Phase 2A-3c 已交付持久化 Repair Plan dry-run：严格命令边界对原始 request/idempotency identity 做服务端
+SHA-256，只持久化 digest；在同一 `REPEATABLE READ` 证据快照中生成不可变 Run/Action，记录 Control root、
+before/expected decimal、完整 issue manifest/count 与 canonical evidence digest。内部 Plan hook 消费未采样的
+完整 issues/expected capacities；公开 3b 的 `sample_limit` 仍只约束响应。evidence manifest 承诺全量物理
+Policy/Capacity/Attempt/Hold/Movement/Control/Checkpoint（含 id/deleted_at），递归 canonical serializer 按
+codepoint 排对象 key并保留数组顺序。独立 append-only identity registry 绑定 Run，Run 硬删除也可检测。
+相同 identity 的并发请求先在固定 session 获取有界 advisory lock，再在同一连接建立 RR snapshot；测试以
+`pg_locks` 精确 tuple 与 `pg_blocking_pids` 证明真实等待，
+exact command/evidence 只 replay 原 Run，审计物理行 soft-delete、缺失、额外或字段漂移均 fail closed。
+
+**3c 仍不修改任何业务 Counter 或 Ledger。** manual-required/not-activated 只记录 Run；仅 pure safe drift 生成
+proposed Action。Phase 2A-3d Apply、锁内二次验证、version CAS、审批与回滚仍未完成，scheduled reconcile 仍为
+真正 READ ONLY。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

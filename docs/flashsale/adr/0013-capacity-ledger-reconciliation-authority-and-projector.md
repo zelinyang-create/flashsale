@@ -1,6 +1,6 @@
 # ADR-0013：Capacity Ledger 对账权威层级与纯函数 Projector
 
-- 状态：Accepted（Phase 2A-3a 契约/Projector；Phase 2A-3b 只读数据库审计）
+- 状态：Accepted（Phase 2A-3a Projector；3b 只读审计；3c Repair Plan dry-run 审计）
 - 日期：2026-09-21
 - 关联：ADR-0011、ADR-0012
 
@@ -113,7 +113,24 @@ partial index 既不能代替物理全集校验，也没有足够 benchmark 证�
 输出显式标记 `domain = movement_ledger`，不得覆盖或提升 Phase 1 audit 的 `healthy` 语义。3b 不暴露写入、
 不接 scheduled repair、不改 materialized counter，也不补造、删除或恢复任何 Ledger 行。
 
-## 后续 Repair 锁协议（预告，不在 2A-3a 实现）
+## Phase 2A-3c：持久化 Repair Plan dry-run
+
+3c 先在固定 PostgreSQL session 上取得 request identity 级 advisory lock，再在同一连接建立
+`REPEATABLE READ` 可写事务并复用 3b snapshot/projector；事务唯一允许写入
+`CapacityRepairIdentity/CapacityRepairRun/CapacityRepairAction` 审计表，不修改任何业务 Counter 或 Ledger。Run 固化 request
+identity hash、command hash、scope、Control root、outcome、actor/reason/ticket、snapshot 和 evidence digest；
+不会保存原始 idempotency key。Action 以 decimal string 固化 Capacity before/expected numeric/raw mirror、
+issue codes、classification 和独立 evidence digest。
+
+3c 消费 Projector 的完整 issue/expected 集合，外部 3b `sample_limit` 只限制展示，绝不截断 Plan。
+evidence manifest 覆盖全量物理 Policy/Capacity/Attempt/Hold/Movement/Control/Checkpoint（含物理 id、
+`deleted_at` 与投影字段），并保存完整 issue manifest/count。独立 identity registry 不以 FK 依赖 Run，
+因此 Run 被硬删后 replay 仍 fail closed。相同 request identity 串行化；完全相同的 command 与 evidence 返回原 Run，任何 command/evidence 或
+Run/Action 物理全集漂移均 fail closed。只有 non-OPEN 范围内纯 held/consumed/raw mirror drift 生成
+`safe_repair/proposed` Action。not-activated、root/granted/identity/manual 问题只生成 Run，不伪造可执行
+Action。Plan 不代表已修复，Phase 2A-3d Apply 尚未实现。
+
+## 后续 Repair Apply 锁协议（仅 Phase 2A-3d，当前未实现）
 
 后续数据库 Reconcile/Repair 至少需要：
 
@@ -123,12 +140,12 @@ partial index 既不能代替物理全集校验，也没有足够 benchmark 证�
 4. 仅对仍为 safe-repair candidate 的 materialized held/consumed/raw mirror 做 version CAS；
 5. 写独立审计证据，提交后再次对账。任何条件漂移均回滚并转人工。
 
-锁顺序必须与在线 Writer/Provision 协议一致，具体 SQL、批处理和恢复 Runbook 留待 Phase 2A-3c。
+锁顺序必须与在线 Writer/Provision 协议一致，具体 SQL、批处理和恢复 Runbook 留待 Phase 2A-3d。
 
 ## 后果
 
 - 优点：不会用不可信 Ledger 覆盖仍在服务流量的在线状态；超大 numeric 无精度损失；Projector 可被大量
   单元测试和未来离线工具复用。
 - 代价：很多“看似可修”的缺口会被保守地升级为人工处理；Subject counter 需要独立事实来源与恢复设计。
-- 已完成：只读数据库 Reader、全局 root gate、Reconcile Handler 与有界结果采样。
-- 明确未完成：Repair Writer、Rebuild、修复审计表、Repair Runbook、定时修复和生产修复门禁。
+- 已完成：只读数据库 Reader、全局 root gate、Reconcile Handler，以及不可变 dry-run Run/Action 审计计划。
+- 明确未完成：Repair Apply Writer、Rebuild、Counter CAS、定时修复和生产修复门禁。

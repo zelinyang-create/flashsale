@@ -20,6 +20,9 @@ import {
   CapacityMovement,
   CapacityMovementCheckpoint,
   CapacityMovementControl,
+  CapacityRepairAction,
+  CapacityRepairIdentity,
+  CapacityRepairRun,
   PurchaseAttempt,
   SubjectAllocation,
 } from "../models"
@@ -55,6 +58,9 @@ const models = [
   CapacityMovement,
   CapacityMovementCheckpoint,
   CapacityMovementControl,
+  CapacityRepairAction,
+  CapacityRepairIdentity,
+  CapacityRepairRun,
   PurchaseAttempt,
   AllocationHold,
   SubjectAllocation,
@@ -71,6 +77,7 @@ const ALLOCATION_MIGRATION = {
   MOVEMENT_DIGEST: "Migration20260921060745",
   MOVEMENT_CHECKPOINT_KIND: "Migration20260921064136",
   MOVEMENT_ATTEMPT_BINDING: "Migration20260921071902",
+  CAPACITY_REPAIR_AUDIT: "Migration20260921105955",
 } as const
 
 type NamedMigrator = {
@@ -88,10 +95,82 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleName: FlashSalePluginModule.ALLOCATION,
   resolve: path.resolve(__dirname, ".."),
   cwd: path.resolve(__dirname, "../../../.."),
-  dbName: "medusa-flash-sale-allocation",
+  dbName: "medusa-flash-sale-allocation-3c-final-v2",
   moduleModels: models,
   pathToMigrations: allocationMigrations,
   testSuite: ({ MikroOrmWrapper, service }) => {
+    it("reverts an empty repair audit and reapplies its generated migration", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await downNamed(migrator, ALLOCATION_MIGRATION.CAPACITY_REPAIR_AUDIT)
+      expect(
+        await manager.execute(
+          `select
+             to_regclass('public.flash_sale_capacity_repair_run') as run_table,
+             to_regclass('public.flash_sale_capacity_repair_action') as action_table,
+             to_regclass('public.flash_sale_capacity_repair_identity') as identity_table`
+        )
+      ).toEqual([{ run_table: null, action_table: null, identity_table: null }])
+      await migrator.up()
+      expect(
+        await manager.execute(
+          `select
+             to_regclass('public.flash_sale_capacity_repair_run') is not null as run_table,
+             to_regclass('public.flash_sale_capacity_repair_action') is not null as action_table,
+             to_regclass('public.flash_sale_capacity_repair_identity') is not null as identity_table`
+        )
+      ).toEqual([{ run_table: true, action_table: true, identity_table: true }])
+    })
+
+    it("blocks repair-audit downgrade when any physical row exists", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_run
+          (id, request_identity_digest, command_digest, status, actor, reason,
+           ticket, evidence_digest, issue_codes, issue_count, issue_manifest,
+           evidence_manifest, snapshot_at, finished_at)
+         values ('fsreprun_guard', ?, ?, 'not_activated', 'operator', 'guard',
+                 'INC-GUARD', ?, '[]'::jsonb, 0, '[]'::jsonb,
+                 '{"schema":"test"}'::jsonb, now(), now())`,
+        ["a".repeat(64), "b".repeat(64), "c".repeat(64)]
+      )
+      await manager.execute(
+        `update flash_sale_capacity_repair_run set deleted_at = now()`
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_AUDIT],
+        })
+      ).rejects.toThrow("refusing to downgrade non-empty capacity repair audit")
+      expect(
+        await manager.execute(
+          `select to_regclass('public.flash_sale_capacity_repair_run') is not null as run_table`
+        )
+      ).toEqual([{ run_table: true }])
+    })
+
+    it("blocks the direct named audit downgrade for an Identity-only tombstone", async () => {
+      const manager = MikroOrmWrapper.forkManager()
+      const migrator = MikroOrmWrapper.getOrm().getMigrator()
+      await manager.execute(
+        `insert into flash_sale_capacity_repair_identity
+          (id, request_identity_digest, run_id, command_digest, evidence_digest)
+         values ('fsrepid_guard', ?, 'fsreprun_missing', ?, ?)`,
+        ["d".repeat(64), "e".repeat(64), "f".repeat(64)]
+      )
+      await expect(
+        migrator.down({
+          migrations: [ALLOCATION_MIGRATION.CAPACITY_REPAIR_AUDIT],
+        })
+      ).rejects.toThrow("refusing to downgrade non-empty capacity repair audit")
+      expect(
+        await manager.execute(
+          `select to_regclass('public.flash_sale_capacity_repair_identity') is not null as identity_table`
+        )
+      ).toEqual([{ identity_table: true }])
+    })
+
     it("reverts and reapplies the Allocation migration without schema loss", async () => {
       const orm = MikroOrmWrapper.getOrm()
       const migrator = orm.getMigrator()
@@ -1215,7 +1294,7 @@ moduleIntegrationTestRunner<FlashSaleAllocationModuleService>({
   moduleName: FlashSalePluginModule.ALLOCATION,
   resolve: path.resolve(__dirname, ".."),
   cwd: path.resolve(__dirname, "../../../.."),
-  dbName: "medusa-flash-sale-allocation",
+  dbName: "medusa-flash-sale-allocation-3c-final-v2",
   moduleModels: models,
   pathToMigrations: campaignMigrations,
   testSuite: ({ MikroOrmWrapper, dbConfig }) => {
