@@ -7,13 +7,20 @@ import {
   CheckoutCommandErrorCode,
   CheckoutExecution,
   CheckoutExecutionItem,
+  CheckoutOutboxControl,
+  CheckoutOutboxEvent,
 } from ".."
 import FlashSaleCheckoutModuleService from "../service"
 import { WRITE_COMMAND_REQUIRED } from "../service"
 
 jest.setTimeout(120000)
 
-const moduleModels = [CheckoutExecution, CheckoutExecutionItem]
+const moduleModels = [
+  CheckoutExecution,
+  CheckoutExecutionItem,
+  CheckoutOutboxControl,
+  CheckoutOutboxEvent,
+]
 const pathToMigrations = path.resolve(__dirname, "../migrations")
 
 async function waitForBlockedCheckoutCommand(manager: SqlEntityManager) {
@@ -122,10 +129,18 @@ moduleIntegrationTestRunner<FlashSaleCheckoutModuleService>({
         await manager.execute(
           `select
              to_regclass('public.flash_sale_checkout_execution') is not null as table_exists,
+             to_regclass('public.flash_sale_checkout_outbox_event') is not null as outbox_exists,
+             exists(select 1 from information_schema.columns where table_name =
+               'flash_sale_checkout_execution' and column_name = 'business_version') as business_version_exists,
              exists(select 1 from pg_constraint where conname =
                'ck_flash_sale_checkout_success_result') as success_check`
         )
-      ).toEqual([{ table_exists: true, success_check: false }])
+      ).toEqual([{
+        table_exists: true,
+        outbox_exists: false,
+        business_version_exists: false,
+        success_check: true,
+      }])
       await manager.execute(
         `insert into flash_sale_checkout_execution
           (id, attempt_id, campaign_id, subject_id, cart_id, command_id,

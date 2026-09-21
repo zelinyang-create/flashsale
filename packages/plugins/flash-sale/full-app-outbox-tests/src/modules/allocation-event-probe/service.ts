@@ -4,7 +4,14 @@ import type { DAL } from "@medusajs/framework/types"
 import { MedusaService } from "@medusajs/framework/utils"
 import {
   AllocationEventWireEnvelope,
-  validateAllocationEventWireEnvelope,
+  CheckoutEventWireEnvelope,
+  ALLOCATION_OUTBOX_EVENT_NAMES,
+  CHECKOUT_OUTBOX_EVENT_NAMES,
+  canonicalJson,
+  normalizeAllocationEventWireEnvelope,
+  normalizeCheckoutEventWireEnvelope,
+  CHECKOUT_OUTBOX_AGGREGATE_TYPE,
+  ALLOCATION_OUTBOX_AGGREGATE_TYPE,
 } from "../../../../src/shared"
 import {
   AllocationEventProbeCursor,
@@ -50,6 +57,7 @@ type InboxRow = {
   event_id: string
   event_name: string
   event_hash: string
+  source_module: string
   aggregate_type: string
   aggregate_id: string
   aggregate_version: number | string
@@ -74,10 +82,22 @@ export default class AllocationEventProbeModuleService extends MedusaService({
 
   async applyAllocationEvent(
     eventName: string,
-    envelope: AllocationEventWireEnvelope
+    envelope: AllocationEventWireEnvelope | CheckoutEventWireEnvelope
   ): Promise<{ replayed: boolean; delivery_count: number }> {
-    validateAllocationEventWireEnvelope(envelope)
-    if (eventName !== envelope.event_name) {
+    // Select the strict validator from the trusted subscription event name,
+    // then use only its immutable descriptor snapshot below. Never inspect the
+    // mutable caller object to decide which validator should run.
+    const acceptedEnvelope = CHECKOUT_OUTBOX_EVENT_NAMES.includes(eventName as never)
+      ? normalizeCheckoutEventWireEnvelope(envelope)
+      : ALLOCATION_OUTBOX_EVENT_NAMES.includes(eventName as never)
+      ? normalizeAllocationEventWireEnvelope(envelope)
+      : (() => { throw new AllocationEventProbeError("EVENT_DRIFT", "Unknown event name") })()
+    const sourceModule = acceptedEnvelope.aggregate_type === CHECKOUT_OUTBOX_AGGREGATE_TYPE
+      ? "checkout"
+      : acceptedEnvelope.aggregate_type === ALLOCATION_OUTBOX_AGGREGATE_TYPE
+      ? "allocation"
+      : (() => { throw new AllocationEventProbeError("EVENT_DRIFT", "Unknown outbox source") })()
+    if (eventName !== acceptedEnvelope.event_name) {
       throw new AllocationEventProbeError(
         "EVENT_DRIFT",
         "Outer event name differs from the immutable envelope"
@@ -91,20 +111,22 @@ export default class AllocationEventProbeModuleService extends MedusaService({
         const now = await this.databaseNow(manager)
         const cursorId = createHash("sha256")
           .update(
-            `${ALLOCATION_EVENT_PROBE_CONSUMER}\u0000${envelope.aggregate_type}\u0000${envelope.aggregate_id}`
+            `${ALLOCATION_EVENT_PROBE_CONSUMER}\u0000${sourceModule}\u0000${acceptedEnvelope.aggregate_type}\u0000${acceptedEnvelope.aggregate_id}`
           )
           .digest("hex")
         await manager.execute(
           `insert into flash_sale_test_allocation_event_cursor
-            (id, consumer_id, aggregate_type, aggregate_id, last_version,
+            (id, consumer_id, source_module, aggregate_type, aggregate_id, last_version,
              effect_count, created_at, updated_at)
-           values (?, ?, ?, ?, 1, 0, ?::timestamptz, ?::timestamptz)
-           on conflict (consumer_id, aggregate_type, aggregate_id) do nothing`,
+           values (?, ?, ?, ?, ?, ?, 0, ?::timestamptz, ?::timestamptz)
+           on conflict do nothing`,
           [
             cursorId,
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
+            sourceModule === "allocation" ? 1 : 0,
             now,
             now,
           ]
@@ -112,12 +134,13 @@ export default class AllocationEventProbeModuleService extends MedusaService({
         const cursors = (await manager.execute(
           `select last_version, last_event_id, last_event_hash, effect_count
              from flash_sale_test_allocation_event_cursor
-            where consumer_id = ? and aggregate_type = ? and aggregate_id = ?
+            where consumer_id = ? and source_module = ? and aggregate_type = ? and aggregate_id = ?
             for update`,
           [
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
           ]
         )) as Array<{
           last_version: number | string
@@ -125,40 +148,48 @@ export default class AllocationEventProbeModuleService extends MedusaService({
           last_event_hash: string | null
           effect_count: number | string
         }>
+        if (!cursors[0]) {
+          throw new AllocationEventProbeError(
+            "EVENT_DRIFT",
+            "Cursor identity hash belongs to another aggregate"
+          )
+        }
         const existing = (await manager.execute(
-          `select event_id, event_name, event_hash, aggregate_type, aggregate_id,
-                  aggregate_version, occurred_at, delivery_count
+          `select event_id, event_name, event_hash, source_module, aggregate_type, aggregate_id,
+                  aggregate_version, occurred_at, delivery_count, payload
              from flash_sale_test_allocation_event_inbox
-            where consumer_id = ? and event_id = ? for update`,
-          [ALLOCATION_EVENT_PROBE_CONSUMER, envelope.event_id]
+            where consumer_id = ? and source_module = ? and event_id = ? for update`,
+          [ALLOCATION_EVENT_PROBE_CONSUMER, sourceModule, acceptedEnvelope.event_id]
         )) as InboxRow[]
         if (existing[0]) {
-          this.assertExact(existing[0], envelope)
+          this.assertExact(existing[0], acceptedEnvelope, sourceModule)
           const rows = (await manager.execute(
             `update flash_sale_test_allocation_event_inbox
                 set delivery_count = delivery_count + 1,
                     last_received_at = ?::timestamptz,
                     updated_at = ?::timestamptz
-              where consumer_id = ? and event_id = ?
+              where consumer_id = ? and source_module = ? and event_id = ?
               returning delivery_count`,
             [
               now,
               now,
               ALLOCATION_EVENT_PROBE_CONSUMER,
-              envelope.event_id,
+              sourceModule,
+              acceptedEnvelope.event_id,
             ]
           )) as Array<{ delivery_count: number | string }>
           return { replayed: true, delivery_count: Number(rows[0].delivery_count) }
         }
         const versionOwner = (await manager.execute(
           `select event_id from flash_sale_test_allocation_event_inbox
-            where consumer_id = ? and aggregate_type = ? and aggregate_id = ?
+            where consumer_id = ? and source_module = ? and aggregate_type = ? and aggregate_id = ?
               and aggregate_version = ?`,
           [
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
-            envelope.aggregate_version,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
+            acceptedEnvelope.aggregate_version,
           ]
         )) as Array<{ event_id: string }>
         if (versionOwner[0]) {
@@ -168,39 +199,40 @@ export default class AllocationEventProbeModuleService extends MedusaService({
           )
         }
         const lastVersion = Number(cursors[0].last_version)
-        if (envelope.aggregate_version > lastVersion + 1) {
+        if (acceptedEnvelope.aggregate_version > lastVersion + 1) {
           throw new AllocationEventProbeError(
             "VERSION_GAP",
             "Allocation event arrived with a version gap"
           )
         }
-        if (envelope.aggregate_version <= lastVersion) {
+        if (acceptedEnvelope.aggregate_version <= lastVersion) {
           throw new AllocationEventProbeError(
             "STALE_UNKNOWN_EVENT",
             "Unknown stale allocation event cannot be applied"
           )
         }
-        const inboxId = `fsprobein_${envelope.event_id}`.slice(0, 255)
+        const inboxId = `fsprobein_${acceptedEnvelope.event_id}`.slice(0, 255)
         await manager.execute(
           `insert into flash_sale_test_allocation_event_inbox
-            (id, consumer_id, event_id, event_name, event_hash, aggregate_type,
+            (id, consumer_id, event_id, event_name, event_hash, source_module, aggregate_type,
              aggregate_id, aggregate_version, occurred_at, payload,
              delivery_count, first_received_at, last_received_at, processed_at,
              created_at, updated_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz, ?::jsonb, 1,
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz, ?::jsonb, 1,
                    ?::timestamptz, ?::timestamptz, ?::timestamptz,
                    ?::timestamptz, ?::timestamptz)`,
           [
             inboxId,
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.event_id,
-            envelope.event_name,
-            envelope.event_hash,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
-            envelope.aggregate_version,
-            envelope.occurred_at,
-            JSON.stringify(envelope.payload),
+            acceptedEnvelope.event_id,
+            acceptedEnvelope.event_name,
+            acceptedEnvelope.event_hash,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
+            acceptedEnvelope.aggregate_version,
+            acceptedEnvelope.occurred_at,
+            JSON.stringify(acceptedEnvelope.payload),
             now,
             now,
             now,
@@ -211,19 +243,20 @@ export default class AllocationEventProbeModuleService extends MedusaService({
         this.trip("after_inbox_insert")
         await manager.execute(
           `insert into flash_sale_test_allocation_event_effect
-            (id, consumer_id, event_id, event_hash, aggregate_type, aggregate_id,
+            (id, consumer_id, event_id, event_hash, source_module, aggregate_type, aggregate_id,
              aggregate_version, effect_name, applied_at, created_at, updated_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz,
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::timestamptz,
                    ?::timestamptz, ?::timestamptz)`,
           [
-            `fsprobeef_${envelope.event_id}`.slice(0, 255),
+            `fsprobeef_${acceptedEnvelope.event_id}`.slice(0, 255),
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.event_id,
-            envelope.event_hash,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
-            envelope.aggregate_version,
-            envelope.event_name,
+            acceptedEnvelope.event_id,
+            acceptedEnvelope.event_hash,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
+            acceptedEnvelope.aggregate_version,
+            acceptedEnvelope.event_name,
             now,
             now,
             now,
@@ -234,15 +267,16 @@ export default class AllocationEventProbeModuleService extends MedusaService({
               set last_version = ?, last_event_id = ?, last_event_hash = ?,
                   effect_count = effect_count + 1,
                   updated_at = ?::timestamptz
-            where consumer_id = ? and aggregate_type = ? and aggregate_id = ?`,
+            where consumer_id = ? and source_module = ? and aggregate_type = ? and aggregate_id = ?`,
           [
-            envelope.aggregate_version,
-            envelope.event_id,
-            envelope.event_hash,
+            acceptedEnvelope.aggregate_version,
+            acceptedEnvelope.event_id,
+            acceptedEnvelope.event_hash,
             now,
             ALLOCATION_EVENT_PROBE_CONSUMER,
-            envelope.aggregate_type,
-            envelope.aggregate_id,
+            sourceModule,
+            acceptedEnvelope.aggregate_type,
+            acceptedEnvelope.aggregate_id,
           ]
         )
         this.trip("after_effect_before_commit")
@@ -251,14 +285,21 @@ export default class AllocationEventProbeModuleService extends MedusaService({
     )
   }
 
-  private assertExact(row: InboxRow, envelope: AllocationEventWireEnvelope) {
+  private assertExact(
+    row: InboxRow & { payload?: Record<string, unknown> | string },
+    envelope: AllocationEventWireEnvelope | CheckoutEventWireEnvelope,
+    sourceModule: string
+  ) {
     if (
       row.event_name !== envelope.event_name ||
       row.event_hash !== envelope.event_hash ||
+      row.source_module !== sourceModule ||
       row.aggregate_type !== envelope.aggregate_type ||
       row.aggregate_id !== envelope.aggregate_id ||
       Number(row.aggregate_version) !== envelope.aggregate_version ||
-      new Date(row.occurred_at).toISOString() !== envelope.occurred_at
+      new Date(row.occurred_at).toISOString() !== envelope.occurred_at ||
+      canonicalJson(typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload) !==
+        canonicalJson(envelope.payload)
     ) {
       throw new AllocationEventProbeError(
         "EVENT_DRIFT",

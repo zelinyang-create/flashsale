@@ -1,9 +1,13 @@
 import type { ConfigModule } from "@medusajs/framework/types"
 import { Modules } from "@medusajs/framework/utils"
-import { ALLOCATION_OUTBOX_EVENT_NAMES } from "../../../shared"
+import {
+  ALLOCATION_OUTBOX_EVENT_NAMES,
+  CHECKOUT_OUTBOX_EVENT_NAMES,
+} from "../../../shared"
 import {
   AllocationOutboxDispatcherConfigError,
   parseAllocationOutboxDispatcherConfig,
+  parseFlashSaleOutboxDispatcherConfig,
 } from "../config"
 
 function manifest(
@@ -47,6 +51,12 @@ describe("allocation outbox dispatcher config", () => {
         { projectConfig: {} } as ConfigModule
       )
     ).toEqual({ enabled: false })
+    expect(
+      parseFlashSaleOutboxDispatcherConfig(
+        { FLASH_SALE_CHECKOUT_OUTBOX_DISPATCH_ENABLED: "true" },
+        { projectConfig: {} } as ConfigModule
+      )
+    ).toEqual({ enabled: false })
   })
 
   it("accepts an explicit complete Redis configuration", () => {
@@ -60,6 +70,39 @@ describe("allocation outbox dispatcher config", () => {
         [ALLOCATION_OUTBOX_EVENT_NAMES[0]]: ["allocation-consumer-v1"],
       }),
     })
+  })
+
+  it("preserves allocation-only config and requires an exact union before enabling checkout", () => {
+    expect(parseFlashSaleOutboxDispatcherConfig(enabled, config())).toMatchObject({
+      enabled: true,
+      checkout: null,
+    })
+    const union = [
+      ...ALLOCATION_OUTBOX_EVENT_NAMES.map((event_name) => ({
+        event_name, subscriber_ids: ["allocation-consumer-v1"],
+      })),
+      ...CHECKOUT_OUTBOX_EVENT_NAMES.map((event_name) => ({
+        event_name, subscriber_ids: ["checkout-consumer-v1"],
+      })),
+    ]
+    expect(parseFlashSaleOutboxDispatcherConfig({
+      ...enabled,
+      FLASH_SALE_CHECKOUT_OUTBOX_DISPATCH_ENABLED: "true",
+      FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON: JSON.stringify(union),
+    }, config())).toMatchObject({
+      enabled: true,
+      concurrency: 4,
+      allocation: { subscriber_manifest: expect.objectContaining({
+        [ALLOCATION_OUTBOX_EVENT_NAMES[0]]: ["allocation-consumer-v1"],
+      }) },
+      checkout: { subscriber_manifest: expect.objectContaining({
+        [CHECKOUT_OUTBOX_EVENT_NAMES[0]]: ["checkout-consumer-v1"],
+      }) },
+    })
+    expect(() => parseFlashSaleOutboxDispatcherConfig({
+      ...enabled,
+      FLASH_SALE_CHECKOUT_OUTBOX_DISPATCH_ENABLED: "true",
+    }, config())).toThrow(AllocationOutboxDispatcherConfigError)
   })
 
   it.each([

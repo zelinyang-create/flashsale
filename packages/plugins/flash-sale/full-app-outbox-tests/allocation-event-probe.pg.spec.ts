@@ -6,6 +6,11 @@ import {
   AllocationEventWireEnvelope,
   AllocationOutboxEventName,
   hashAllocationEventIdentity,
+  CHECKOUT_OUTBOX_AGGREGATE_TYPE,
+  CHECKOUT_OUTBOX_SCHEMA_VERSION,
+  CheckoutEventWireEnvelope,
+  CheckoutOutboxEventName,
+  hashCheckoutEventIdentity,
 } from "../src/shared"
 import AllocationEventProbeModuleService, {
   AllocationEventProbeError,
@@ -46,6 +51,31 @@ function heldEnvelope(
     event_hash: hashAllocationEventIdentity(identity),
     occurred_at: "2026-09-20T20:00:00.000Z",
     ...overrides,
+  }
+}
+
+function checkoutEnvelope(): CheckoutEventWireEnvelope {
+  const aggregateId = `checkout-probe-${++sequence}`
+  const identity = {
+    event_name: CheckoutOutboxEventName.PREPARED,
+    schema_version: CHECKOUT_OUTBOX_SCHEMA_VERSION,
+    aggregate_type: CHECKOUT_OUTBOX_AGGREGATE_TYPE,
+    aggregate_id: aggregateId,
+    aggregate_version: 1,
+    payload: {
+      execution_id: aggregateId,
+      attempt_id: `attempt-${aggregateId}`,
+      campaign_id: "campaign-probe",
+      rules_version: 1,
+      state: "prepared",
+      items: [{ campaign_item_id: "item-probe", variant_id: "variant-probe", quantity: 1 }],
+    },
+  } as const
+  return {
+    event_id: `event-${aggregateId}`,
+    ...identity,
+    event_hash: hashCheckoutEventIdentity(identity),
+    occurred_at: "2026-09-20T20:00:00.000Z",
   }
 }
 
@@ -99,6 +129,42 @@ moduleIntegrationTestRunner<AllocationEventProbeModuleService>({
         [event.aggregate_id]
       )) as Array<{ last_version: number; effect_count: number }>
       expect(cursor[0]).toEqual({ last_version: 2, effect_count: 1 })
+    })
+
+    it("starts a Checkout source cursor at zero and applies v1 once under 100 duplicates", async () => {
+      const event = checkoutEnvelope()
+      const results = await Promise.all(
+        Array.from({ length: 100 }, () =>
+          service.applyAllocationEvent(event.event_name, event)
+        )
+      )
+      expect(results.filter((result) => !result.replayed)).toHaveLength(1)
+      expect(await counts(event.aggregate_id)).toEqual({ inbox: 1, effect: 1, cursor: 1 })
+      expect(await execute(
+        `select source_module, last_version::int, effect_count::int
+           from flash_sale_test_allocation_event_cursor where aggregate_id = ?`,
+        [event.aggregate_id]
+      )).toEqual([{ source_module: "checkout", last_version: 1, effect_count: 1 }])
+    })
+
+    it("persists only the validated immutable snapshot and rejects Proxy input", async () => {
+      const event = checkoutEnvelope()
+      const applying = service.applyAllocationEvent(event.event_name, event)
+      const payload = event.payload as {
+        items: Array<{ quantity: number }>
+      }
+      payload.items[0].quantity = 99
+      await expect(applying).resolves.toEqual({ replayed: false, delivery_count: 1 })
+      expect(await execute(
+        `select (payload #>> '{items,0,quantity}')::int as quantity
+           from flash_sale_test_allocation_event_inbox where event_id = ?`,
+        [event.event_id]
+      )).toEqual([{ quantity: 1 }])
+
+      const proxied = new Proxy(checkoutEnvelope(), {})
+      await expect(
+        service.applyAllocationEvent(CheckoutOutboxEventName.PREPARED, proxied)
+      ).rejects.toThrow("Proxy")
     })
 
     it.each(["after_inbox_insert", "after_effect_before_commit"] as const)(
@@ -161,7 +227,7 @@ moduleIntegrationTestRunner<AllocationEventProbeModuleService>({
       })
     })
 
-    it("applies 100 concurrent duplicate deliveries exactly once", async () => {
+    it("commits one effect for 100 concurrent duplicate deliveries", async () => {
       const event = heldEnvelope()
       const results = await Promise.all(
         Array.from({ length: 100 }, () =>
@@ -182,23 +248,69 @@ moduleIntegrationTestRunner<AllocationEventProbeModuleService>({
       expect(inbox[0].delivery_count).toBe(100)
     })
 
-    it("supports generated migration down-up without schema drift", async () => {
+    it("upgrades populated B1 tables and supports a generated down-up round trip", async () => {
       const migrator = MikroOrmWrapper.getOrm().getMigrator()
       await migrator.down()
       expect(
         await execute(
-          "select to_regclass('public.flash_sale_test_allocation_event_inbox') is null as removed"
+          `select
+             to_regclass('public.flash_sale_test_allocation_event_inbox') is not null as table_kept,
+             exists(select 1 from information_schema.columns where table_name =
+               'flash_sale_test_allocation_event_inbox' and column_name = 'source_module') as source_kept,
+             exists(select 1 from pg_indexes where indexname =
+               'IDX_flash_sale_test_probe_inbox_source_event_unique') as source_index`
         )
-      ).toEqual([{ removed: true }])
+      ).toEqual([{ table_kept: true, source_kept: false, source_index: false }])
+      const legacyHash = "a".repeat(64)
+      await execute(
+        `insert into flash_sale_test_allocation_event_cursor
+          (id, consumer_id, aggregate_type, aggregate_id, last_version, effect_count)
+         values ('legacy-cursor', 'legacy-consumer', 'purchase_attempt', 'legacy-attempt', 2, 1)`
+      )
+      await execute(
+        `insert into flash_sale_test_allocation_event_effect
+          (id, consumer_id, event_id, event_hash, aggregate_type, aggregate_id,
+           aggregate_version, effect_name, applied_at)
+         values ('legacy-effect', 'legacy-consumer', 'legacy-event', ?,
+                 'purchase_attempt', 'legacy-attempt', 2,
+                 'flash_sale.quota.held.v1', now())`,
+        [legacyHash]
+      )
+      await execute(
+        `insert into flash_sale_test_allocation_event_inbox
+          (id, consumer_id, event_id, event_name, event_hash, aggregate_type,
+           aggregate_id, aggregate_version, occurred_at, payload,
+           first_received_at, last_received_at, processed_at)
+         values ('legacy-inbox', 'legacy-consumer', 'legacy-event',
+                 'flash_sale.quota.held.v1', ?, 'purchase_attempt',
+                 'legacy-attempt', 2, now(), '{}'::jsonb, now(), now(), now())`,
+        [legacyHash]
+      )
       await migrator.up()
       expect(
         await execute(
           `select
              to_regclass('public.flash_sale_test_allocation_event_inbox') is not null as inbox,
              to_regclass('public.flash_sale_test_allocation_event_effect') is not null as effect,
-             to_regclass('public.flash_sale_test_allocation_event_cursor') is not null as cursor`
+             to_regclass('public.flash_sale_test_allocation_event_cursor') is not null as cursor,
+             exists(select 1 from pg_indexes where indexname =
+               'IDX_flash_sale_test_probe_inbox_source_event_unique') as source_index,
+             (select source_module from flash_sale_test_allocation_event_cursor
+               where id = 'legacy-cursor') as cursor_source,
+             (select source_module from flash_sale_test_allocation_event_effect
+               where id = 'legacy-effect') as effect_source,
+             (select source_module from flash_sale_test_allocation_event_inbox
+               where id = 'legacy-inbox') as inbox_source`
         )
-      ).toEqual([{ inbox: true, effect: true, cursor: true }])
+      ).toEqual([{
+        inbox: true,
+        effect: true,
+        cursor: true,
+        source_index: true,
+        cursor_source: "allocation",
+        effect_source: "allocation",
+        inbox_source: "allocation",
+      }])
     })
   },
 })

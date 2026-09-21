@@ -11,6 +11,7 @@ const AllocationEventProbeEffect = model
       consumer_id: model.text(),
       event_id: model.text(),
       event_hash: model.text(),
+      source_module: model.text().default("allocation"),
       aggregate_type: model.text(),
       aggregate_id: model.text(),
       aggregate_version: model.number(),
@@ -20,15 +21,16 @@ const AllocationEventProbeEffect = model
   )
   .indexes([
     {
-      name: "IDX_flash_sale_test_probe_effect_event_unique",
-      on: ["consumer_id", "event_id"],
+      name: "IDX_flash_sale_test_probe_effect_source_event_unique",
+      on: ["consumer_id", "source_module", "event_id"],
       unique: true,
       where: null,
     },
     {
-      name: "IDX_flash_sale_test_probe_effect_aggregate_version_unique",
+      name: "IDX_flash_sale_test_probe_effect_source_aggregate_version_unique",
       on: [
         "consumer_id",
+        "source_module",
         "aggregate_type",
         "aggregate_id",
         "aggregate_version",

@@ -28,11 +28,16 @@ import {
   RecordCommerceUnknownCommand,
   TransitionExecutionResult,
 } from "../domain"
+import {
+  appendCheckoutOutboxEvent,
+  verifyCheckoutOutboxReplay,
+} from "./checkout-outbox-producer"
 
 type ExecutionRow = Omit<
   CheckoutExecutionDTO,
   | "rules_version"
   | "version"
+  | "business_version"
   | "attempt_count"
   | "lease_epoch"
   | "completion_authorized_epoch"
@@ -45,9 +50,11 @@ type ExecutionRow = Omit<
   | "commerce_started_at"
   | "commerce_resolved_at"
   | "terminal_at"
+  | "business_changed_at"
 > & {
   rules_version: number | string
   version: number | string
+  business_version: number | string
   attempt_count: number | string
   lease_epoch: number | string
   completion_authorized_epoch: number | string | null
@@ -60,6 +67,7 @@ type ExecutionRow = Omit<
   completion_authorized_at: Date | string | null
   commerce_resolved_at: Date | string | null
   terminal_at: Date | string | null
+  business_changed_at: Date | string | null
 }
 
 type ItemRow = Omit<
@@ -75,7 +83,8 @@ type ItemRow = Omit<
 const EXECUTION_COLUMNS = `id, attempt_id, campaign_id, subject_id, cart_id,
   command_id, request_hash, commerce_transaction_id, rules_version, state,
   commerce_result_hash, terminal_command_hash,
-  order_id, version, attempt_count, lease_owner, lease_until, lease_epoch,
+  order_id, version, business_version, outbox_stream_started,
+  business_changed_at, attempt_count, lease_owner, lease_until, lease_epoch,
   completion_authorized_epoch, completion_authorized_at,
   next_reconcile_at, last_error_code, commerce_started_at,
   commerce_resolved_at, terminal_at, created_at, updated_at, deleted_at`
@@ -92,6 +101,9 @@ function mapExecution(row: ExecutionRow): CheckoutExecutionDTO {
     ...row,
     rules_version: Number(row.rules_version),
     version: Number(row.version),
+    business_version: Number(row.business_version),
+    outbox_stream_started: Boolean(row.outbox_stream_started),
+    business_changed_at: asNullableDate(row.business_changed_at),
     attempt_count: Number(row.attempt_count),
     lease_epoch: Number(row.lease_epoch),
     completion_authorized_epoch:
@@ -125,19 +137,28 @@ function conflict(code: CheckoutCommandErrorCode, message: string): never {
 }
 
 export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
-  constructor(private readonly baseRepository: DAL.RepositoryService) {}
+  constructor(
+    private readonly baseRepository: DAL.RepositoryService,
+    private readonly outboxObserver: Readonly<{
+      afterBusinessTransitionBeforeOutbox?: () => Promise<void> | void
+      afterOutboxAppendBeforeCommit?: () => Promise<void> | void
+    }> = {}
+  ) {}
 
   async prepareExecution(
     command: PrepareExecutionCommand
   ): Promise<PrepareExecutionResult> {
     return await this.transaction(async (manager) => {
       const id = generateEntityId(undefined, "fscheckout")
+      const now = await this.databaseNow(manager)
       const inserted = (await manager.execute(
         `insert into flash_sale_checkout_execution
           (id, attempt_id, campaign_id, subject_id, cart_id, command_id,
            request_hash, commerce_transaction_id, rules_version, state,
-           version, attempt_count, lease_epoch)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, 0)
+           version, business_version, outbox_stream_started,
+           business_changed_at, attempt_count, lease_epoch, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, true,
+                 ?::timestamptz, 0, 0, ?::timestamptz)
          on conflict do nothing
          returning ${EXECUTION_COLUMNS}`,
         [
@@ -151,6 +172,8 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           generateEntityId(undefined, "fscommerce"),
           command.rules_version,
           CheckoutExecutionState.PREPARED,
+          now,
+          now,
         ]
       )) as ExecutionRow[]
 
@@ -172,10 +195,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
             ]
           )
         }
-        return {
-          ...(await this.snapshot(manager, inserted[0])),
-          replayed: false,
-        }
+        const snapshot = await this.snapshot(manager, inserted[0])
+        await this.appendBusinessEvent(manager, snapshot)
+        return { ...snapshot, replayed: false }
       }
 
       const existing = await this.findIdentityCollision(manager, command)
@@ -187,6 +209,7 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
       }
       const snapshot = await this.snapshot(manager, existing)
       this.assertPrepareReplay(snapshot, command)
+      await verifyCheckoutOutboxReplay(manager, snapshot)
       return { ...snapshot, replayed: true }
     })
   }
@@ -209,8 +232,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
         current.lease_until &&
         asDate(current.lease_until).getTime() > now.getTime()
       ) {
+        const snapshot = await this.snapshot(manager, current)
+        await verifyCheckoutOutboxReplay(manager, snapshot)
         return {
-          ...(await this.snapshot(manager, current)),
+          ...snapshot,
           replayed: true,
         }
       }
@@ -234,6 +259,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           `Cannot claim commerce lease from ${current.state}`
         )
       }
+      const before = await this.snapshot(manager, current)
+      await verifyCheckoutOutboxReplay(manager, before)
+      const businessTransition =
+        current.state !== CheckoutExecutionState.COMMERCE_PENDING
       const rows = (await manager.execute(
         `update flash_sale_checkout_execution
             set state = ?, lease_owner = ?,
@@ -247,6 +276,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
                 commerce_result_hash = null,
                 attempt_count = attempt_count + 1,
                 commerce_started_at = coalesce(commerce_started_at, ?::timestamptz),
+                business_version = case when state <> ? then business_version + 1 else business_version end,
+                outbox_stream_started = case when state <> ? then true else outbox_stream_started end,
+                business_changed_at = case when state <> ? then ?::timestamptz else business_changed_at end,
                 version = version + 1, updated_at = ?::timestamptz
           where id = ? and version = ? and state = ?
           returning ${EXECUTION_COLUMNS}`,
@@ -255,6 +287,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           command.worker_id,
           now,
           command.lease_seconds,
+          now,
+          CheckoutExecutionState.COMMERCE_PENDING,
+          CheckoutExecutionState.COMMERCE_PENDING,
+          CheckoutExecutionState.COMMERCE_PENDING,
           now,
           now,
           current.id,
@@ -268,7 +304,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Commerce lease claim lost its compare-and-set race"
         )
       }
-      return { ...(await this.snapshot(manager, rows[0])), replayed: false }
+      const snapshot = await this.snapshot(manager, rows[0])
+      if (businessTransition) await this.appendBusinessEvent(manager, snapshot)
+      else await verifyCheckoutOutboxReplay(manager, snapshot)
+      return { ...snapshot, replayed: false }
     })
   }
 
@@ -296,6 +335,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Commerce lease is missing, expired, or owned by another epoch"
         )
       }
+      await verifyCheckoutOutboxReplay(
+        manager,
+        await this.snapshot(manager, current)
+      )
       if (Number(current.completion_authorized_epoch) === command.lease_epoch) {
         return {
           ...(await this.snapshot(manager, current)),
@@ -326,7 +369,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Commerce authorization lost its compare-and-set race"
         )
       }
-      return { ...(await this.snapshot(manager, rows[0])), replayed: false }
+      const snapshot = await this.snapshot(manager, rows[0])
+      await verifyCheckoutOutboxReplay(manager, snapshot)
+      return { ...snapshot, replayed: false }
     })
   }
 
@@ -374,6 +419,7 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Current cart does not match the trusted checkout snapshot"
         )
       }
+      await verifyCheckoutOutboxReplay(manager, snapshot)
       return { ...snapshot, replayed: true }
     })
   }
@@ -387,7 +433,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           where cart_id = ? and deleted_at is null limit 1`,
         [command.cart_id]
       )) as ExecutionRow[]
-      return rows[0] ? await this.snapshot(manager, rows[0]) : null
+      if (!rows[0]) return null
+      const snapshot = await this.snapshot(manager, rows[0])
+      await verifyCheckoutOutboxReplay(manager, snapshot)
+      return snapshot
     })
   }
 
@@ -447,7 +496,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
             "Checkout completion replay does not match the persisted command"
           )
         }
-        return { ...(await this.snapshot(manager, current)), replayed: true }
+        const snapshot = await this.snapshot(manager, current)
+        await verifyCheckoutOutboxReplay(manager, snapshot)
+        return { ...snapshot, replayed: true }
       }
       if (
         current.state !== CheckoutExecutionState.COMMERCE_SUCCEEDED ||
@@ -464,11 +515,18 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Checkout completion version fence was rejected"
         )
       }
+      await verifyCheckoutOutboxReplay(
+        manager,
+        await this.snapshot(manager, current)
+      )
       const now = await this.databaseNow(manager)
       const rows = (await manager.execute(
         `update flash_sale_checkout_execution
             set state = ?, terminal_at = ?::timestamptz,
                 terminal_command_hash = ?,
+                business_version = business_version + 1,
+                outbox_stream_started = true,
+                business_changed_at = ?::timestamptz,
                 version = version + 1, updated_at = ?::timestamptz
           where id = ? and deleted_at is null and state = ? and version = ?
             and commerce_transaction_id = ? and order_id = ?
@@ -477,6 +535,7 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           CheckoutExecutionState.COMPLETED,
           now,
           terminalCommandHash,
+          now,
           now,
           current.id,
           CheckoutExecutionState.COMMERCE_SUCCEEDED,
@@ -491,7 +550,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Checkout completion lost its compare-and-set race"
         )
       }
-      return { ...(await this.snapshot(manager, rows[0])), replayed: false }
+      const snapshot = await this.snapshot(manager, rows[0])
+      await this.appendBusinessEvent(manager, snapshot)
+      return { ...snapshot, replayed: false }
     })
   }
 
@@ -517,7 +578,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
             "Checkout cancellation replay does not match the persisted command"
           )
         }
-        return { ...(await this.snapshot(manager, current)), replayed: true }
+        const snapshot = await this.snapshot(manager, current)
+        await verifyCheckoutOutboxReplay(manager, snapshot)
+        return { ...snapshot, replayed: true }
       }
       if (current.state !== CheckoutExecutionState.COMMERCE_DEFINITIVE_FAILED) {
         conflict(
@@ -531,11 +594,18 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Checkout cancellation version fence was rejected"
         )
       }
+      await verifyCheckoutOutboxReplay(
+        manager,
+        await this.snapshot(manager, current)
+      )
       const now = await this.databaseNow(manager)
       const rows = (await manager.execute(
         `update flash_sale_checkout_execution
             set state = ?, terminal_at = ?::timestamptz,
                 terminal_command_hash = ?,
+                business_version = business_version + 1,
+                outbox_stream_started = true,
+                business_changed_at = ?::timestamptz,
                 version = version + 1, updated_at = ?::timestamptz
           where id = ? and deleted_at is null and state = ? and version = ?
             and commerce_transaction_id = ? and order_id is null
@@ -544,6 +614,7 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           CheckoutExecutionState.CANCELED,
           now,
           terminalCommandHash,
+          now,
           now,
           current.id,
           CheckoutExecutionState.COMMERCE_DEFINITIVE_FAILED,
@@ -557,7 +628,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Checkout cancellation lost its compare-and-set race"
         )
       }
-      return { ...(await this.snapshot(manager, rows[0])), replayed: false }
+      const snapshot = await this.snapshot(manager, rows[0])
+      await this.appendBusinessEvent(manager, snapshot)
+      return { ...snapshot, replayed: false }
     })
   }
 
@@ -584,7 +657,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Checkout replay identity does not match the persisted execution"
         )
       }
-      return await this.snapshot(manager, current)
+      const snapshot = await this.snapshot(manager, current)
+      await verifyCheckoutOutboxReplay(manager, snapshot)
+      return snapshot
     })
   }
 
@@ -641,7 +716,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
             "Commerce result replay does not match the persisted result"
           )
         }
-        return { ...(await this.snapshot(manager, current)), replayed: true }
+        const snapshot = await this.snapshot(manager, current)
+        await verifyCheckoutOutboxReplay(manager, snapshot)
+        return { ...snapshot, replayed: true }
       }
 
       const now = await this.databaseNow(manager)
@@ -659,6 +736,10 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Commerce result state, version, worker, lease, or authorization fence was rejected"
         )
       }
+      await verifyCheckoutOutboxReplay(
+        manager,
+        await this.snapshot(manager, current)
+      )
       const nextReconcileAt = result.reconcileAfterSeconds
         ? new Date(now.getTime() + result.reconcileAfterSeconds * 1000)
         : null
@@ -674,6 +755,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
                   lease_owner = null, lease_until = null,
                   completion_authorized_epoch = null,
                   completion_authorized_at = null,
+                  business_version = business_version + 1,
+                  outbox_stream_started = true,
+                  business_changed_at = ?::timestamptz,
                   version = version + 1, updated_at = ?::timestamptz
             where id = ? and deleted_at is null and state = ? and version = ?
               and lease_owner = ? and lease_epoch = ?
@@ -688,6 +772,7 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
             result.errorCode,
             commerceResolvedAt,
             commerceResultHash,
+            now,
             now,
             current.id,
             CheckoutExecutionState.COMMERCE_PENDING,
@@ -714,7 +799,9 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
           "Commerce result lost its compare-and-set race"
         )
       }
-      return { ...(await this.snapshot(manager, rows[0])), replayed: false }
+      const snapshot = await this.snapshot(manager, rows[0])
+      await this.appendBusinessEvent(manager, snapshot)
+      return { ...snapshot, replayed: false }
     })
   }
 
@@ -829,6 +916,15 @@ export class PostgresCheckoutExecutionStore implements CheckoutExecutionStore {
       execution: mapExecution(execution),
       items: rows.map(mapItem),
     }
+  }
+
+  private async appendBusinessEvent(
+    manager: SqlEntityManager,
+    snapshot: CheckoutExecutionSnapshot
+  ): Promise<void> {
+    await this.outboxObserver.afterBusinessTransitionBeforeOutbox?.()
+    await appendCheckoutOutboxEvent(manager, snapshot)
+    await this.outboxObserver.afterOutboxAppendBeforeCommit?.()
   }
 
   private assertPrepareReplay(

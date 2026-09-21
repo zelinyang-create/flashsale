@@ -5,6 +5,8 @@ import type {
 import {
   ALLOCATION_OUTBOX_EVENT_NAMES,
   AllocationEventWireEnvelope,
+  CHECKOUT_OUTBOX_EVENT_NAMES,
+  CheckoutEventWireEnvelope,
 } from "../../../src/shared"
 import AllocationEventProbeModuleService, {
   ALLOCATION_EVENT_PROBE_CONSUMER,
@@ -14,7 +16,7 @@ import AllocationEventProbeModuleService, {
 export default async function allocationEventProbeSubscriber({
   event,
   container,
-}: SubscriberArgs<AllocationEventWireEnvelope>) {
+}: SubscriberArgs<AllocationEventWireEnvelope | CheckoutEventWireEnvelope>) {
   const probe = container.resolve<AllocationEventProbeModuleService>(
     ALLOCATION_EVENT_PROBE_MODULE
   )
@@ -22,6 +24,6 @@ export default async function allocationEventProbeSubscriber({
 }
 
 export const config: SubscriberConfig = {
-  event: [...ALLOCATION_OUTBOX_EVENT_NAMES],
+  event: [...ALLOCATION_OUTBOX_EVENT_NAMES, ...CHECKOUT_OUTBOX_EVENT_NAMES],
   context: { subscriberId: ALLOCATION_EVENT_PROBE_CONSUMER },
 }

@@ -25,7 +25,7 @@ describe("Allocation outbox job registration", () => {
     jest.isolateModules(() => {
       const job = require("../dispatch-allocation-outbox")
       expect(job[MEDUSA_SKIP_FILE]).toBe(false)
-      expect(job.config.name).toBe("flash-sale-dispatch-allocation-outbox")
+      expect(job.config.name).toBe("flash-sale-dispatch-outboxes")
     })
   })
 })

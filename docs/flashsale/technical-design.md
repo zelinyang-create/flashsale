@@ -895,17 +895,46 @@ Takeover 重投排空；Inbox 两个事务 Failpoint 全回滚；100 路同事�
 动态 Proxy 端口，要求显式 `FLASH_SALE_TEST_REDIS_URL`；Proxy 晚于 Medusa/EventBus 关闭，不回退 Local Provider，
 也不会对共享 Redis 执行 `FLUSH*`。
 
-### 16.3 Phase 1F-B1 尚未保证
+### 16.3 Phase 1F-B2 已实现：Checkout 原子 Producer 与公平多 Lane Dispatch
 
-Phase 1F-B1 不把 Redis Queue Acceptance 误称为 Subscriber Success，也不保证 Redis 基础设施的持久化策略、HA、
-跨 Region 灾备或运维质量；Production Consumer Inbox、Checkout Outbox、Webhook Inbox/Dedup、死信运维 API、通用
-Schema Registry 和端到端业务完成 SLA 仍未实现。Redis reconnecting `emit` 没有外层 Deadline；断线可能让一个 Tick
-持续 Pending，进程内 Overlap Guard 限制并发，而跨进程恢复依赖数据库 Lease/Fencing。晚到 Acceptance 仍可能产生
-重复投递；稳定 Event ID/Hash 与 Consumer Inbox 正是必需条件。系统只声明有条件的 At-least-once 发布尝试，
-**不声明 Exactly-once Delivery**。
+CheckoutExecution 新增独立于技术 CAS `version` 的 `business_version` 与 `outbox_stream_started`。新 Execution 在
+`prepare` 的同一事务写 `checkout.prepared.v1`，从业务版本 1 开始；迁移前 Legacy Row 保持 `false/0` 豁免，第一次
+真实业务转换才原子启动版本 1。Lease Claim/Takeover、Authorize 和只读重放不会递增业务版本，也不会发事件；只有
+`PREPARED/COMMERCE_UNKNOWN -> COMMERCE_PENDING` 会发 `checkout.commerce_pending.v1`，PENDING Lease Takeover 不发。
+其余已实现事实是 `commerce_succeeded`、`commerce_definitive_failed`、`commerce_unknown`、`completed`、`canceled`。
 
-当前仅实现每 Tick 一条低敏感度结构化计数日志；Backlog/Oldest-age、Publish Latency、Retry/Dead/Fenced Metrics 留待
-后续阶段，Phase 1F-B1 不宣称已有完整可观测性。
+Checkout 独占自己的 Outbox Event/Control 表、激活水位、Claim/Mark/Fail/Redrive 与 Reconciliation，没有读取 Allocation
+表，也没有中央跨模块事务。业务 CAS、`business_version + 1` 与 immutable Outbox Append 在同一个 Checkout
+`SqlEntityManager` 事务内完成；Append 前或 Append 后 Commit 前故障均整体回滚，响应丢失重放返回同一 Event ID/Hash。
+Payload 只包含 Execution/Attempt/Campaign/Rules/State、UTF-16 code-unit 排序 Items，以及适用状态下的 Order ID 或
+受限 Error Code；不包含 Subject、Cart、Command/Request/Idempotency 值或摘要、Commerce Transaction、Worker、Lease、
+Epoch、Payment、Token 或原始异常。
+
+激活后，所有业务重放及 `readExecutionReplay`、`readCartCompletionAuthorization`、`findExecutionForCart`、Authorize/Result
+入口都会验证当前业务版本事件；缺失或漂移时 Fail Closed。Reconciliation 检查 started/watermark、连续版本、ahead/gap、
+Hash/Catalog 与合法状态转换，但不会假装重建迁移前历史。
+
+单一 `flash-sale-dispatch-outboxes` Job 通过模块本地 Port 调度 Allocation 与 Checkout，不做 Union SQL。启用 Checkout
+Lane 时，Redis Provider 和两个 Catalog 的 Canonical Event→Exact Subscriber ID Manifest 必须全局预检通过后才允许
+任一 Lane Claim。全局并发预算为 `C`：`C=1` 在 Tick 间轮转；`C >= Lane 数` 时每 Lane 至少一个，余量继续轮转；总
+Claim/Publish 不超过 `C`。一个 Lane 的数据库故障用 `allSettled` 隔离，不改变另一 Lane 已成功的工作；Ack/Fail 始终
+路由回事件所属模块。系统不声明跨模块全局顺序。
+
+Test-only Probe 把 `source_module` 纳入 Inbox/Effect/Cursor Identity；Allocation 第一条可见版本仍是 2，Checkout 从 1
+开始。真实 Redis Full-app 已证明认证 Store Checkout 产生一个 Order/Reservation，Allocation 三个事实与 Checkout 四个
+事实可按任意跨模块顺序进入 Probe；Checkout accepted-before-mark 以同一 ID/Hash 重投，Delivery Count 增至 2 而 Effect
+只提交一次。技术 `version` 可因 Authorize/Takeover 出现空档，业务版本仍连续。
+
+### 16.4 Phase 1F-B2 尚未保证
+
+当前能力是模块本地 Atomic Producer、显式 Redis/BullMQ Queue Acceptance，以及测试 Probe 的事务效果去重；它不把
+Queue Acceptance 误称 Subscriber Success，也不保证 Redis AOF/RDB、Replication、HA、跨 Region 灾备或运维质量。
+没有 Production Consumer Inbox、Exactly-once Delivery、跨模块顺序、Campaign Outbox、Webhook Inbox/Dedup、通用
+Payment UNKNOWN Reconciler、死信运维 API 或通用 Schema Registry。Redis reconnecting `emit` 没有外层 Deadline；
+晚到 Acceptance 仍会产生重复投递，恢复依赖模块本地 Lease/Fencing 和消费者稳定 ID 去重。
+
+当前仅有每 Tick、每 Lane 的低敏感度结构化计数日志；Backlog/Oldest-age、Publish Latency、Retry/Dead/Fenced Metrics
+仍是后续工作，不宣称完整可观测性。
 
 补偿必须按当前事实决定：
 
@@ -1305,15 +1334,15 @@ Nightly/Release Candidate：多实例并发、Failpoint、Toxiproxy、No/Fixed/A
 ### Phase 1：MVP 正确性内核，约两周
 
 Plugin、Campaign、Attempt、Hold、条件 Quota Claim、Idempotency、Checkout Composition、Expiry、Reconciliation、
-Allocation Outbox 原子 Producer/数据库投递状态机、Redis Queue Acceptance Dispatcher、两实例并发测试，以及
-test-only Transactional Inbox/Effect Probe。Production Consumer Inbox 与 Checkout Outbox 不属于当前 1F-B1 交付。
+Allocation/Checkout 各自的原子 Outbox Producer/数据库投递状态机、公平多 Lane Redis Queue Acceptance Dispatcher、
+两实例并发测试，以及 test-only Transactional Inbox/Effect Probe。Production Consumer Inbox 不属于当前 1F-B2 交付。
 
 退出条件：Quota 50、500 并发、10 轮零超发、零重复、零对账差异。
 
 ### Phase 2：高级可靠性，约两周
 
 Movement Ledger、Atomic Inventory Primitive、Reservation Binding、Payment UNKNOWN、Production Consumer/Webhook
-Inbox、Checkout Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
+Inbox、Campaign Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 

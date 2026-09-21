@@ -1,4 +1,7 @@
-import type { AllocationEventWireEnvelope } from "../../shared"
+import type {
+  AllocationEventWireEnvelope,
+  CheckoutEventWireEnvelope,
+} from "../../shared"
 import { compareUtf16CodeUnits } from "../../shared"
 import type {
   AllocationEventAcceptanceReceipt,
@@ -13,9 +16,7 @@ export class AllocationEventTransportError extends Error {
   }
 }
 
-export class MedusaRedisAllocationEventTransport
-  implements AllocationEventTransport
-{
+export class MedusaRedisOutboxEventTransport {
   constructor(private readonly eventBus: MedusaEventBus) {}
 
   assertReady(
@@ -49,7 +50,7 @@ export class MedusaRedisAllocationEventTransport
   }
 
   async publish(
-    envelope: AllocationEventWireEnvelope
+    envelope: AllocationEventWireEnvelope | CheckoutEventWireEnvelope
   ): Promise<AllocationEventAcceptanceReceipt> {
     await this.eventBus.emit({
       name: envelope.event_name,
@@ -61,3 +62,7 @@ export class MedusaRedisAllocationEventTransport
     })
   }
 }
+
+export class MedusaRedisAllocationEventTransport
+  extends MedusaRedisOutboxEventTransport
+  implements AllocationEventTransport {}

@@ -25,6 +25,9 @@ const CheckoutExecution = model
         .default(CheckoutExecutionState.PREPARED),
       order_id: model.text().nullable(),
       version: model.number().default(1),
+      business_version: model.number().default(0),
+      outbox_stream_started: model.boolean().default(false),
+      business_changed_at: model.dateTime().nullable(),
       attempt_count: model.number().default(0),
       lease_owner: model.text().nullable(),
       lease_until: model.dateTime().nullable(),
@@ -86,6 +89,11 @@ const CheckoutExecution = model
     {
       name: "CK_flash_sale_checkout_version",
       expression: "version >= 1",
+    },
+    {
+      name: "CK_flash_sale_checkout_business_stream",
+      expression:
+        "(outbox_stream_started AND business_version >= 1 AND business_changed_at IS NOT NULL) OR (NOT outbox_stream_started AND business_version = 0 AND business_changed_at IS NULL)",
     },
     {
       name: "CK_flash_sale_checkout_attempt_count",

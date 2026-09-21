@@ -2,6 +2,7 @@ import type { ConfigModule } from "@medusajs/framework/types"
 import { Modules } from "@medusajs/framework/utils"
 import {
   ALLOCATION_OUTBOX_EVENT_NAMES,
+  CHECKOUT_OUTBOX_EVENT_NAMES,
   compareUtf16CodeUnits,
 } from "../../shared"
 import type { AllocationOutboxDispatcherConfig } from "./contracts"
@@ -47,7 +48,10 @@ function invalid(name: string): AllocationOutboxDispatcherConfigError {
   )
 }
 
-function parseSubscriberManifest(raw: string | undefined) {
+function parseSubscriberManifest(
+  raw: string | undefined,
+  expectedNames: readonly string[]
+) {
   const name = "FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON"
   if (!raw) throw invalid(name)
   let parsed: unknown
@@ -59,7 +63,7 @@ function parseSubscriberManifest(raw: string | undefined) {
   if (!Array.isArray(parsed)) {
     throw invalid(name)
   }
-  const expected = new Set<string>(ALLOCATION_OUTBOX_EVENT_NAMES)
+  const expected = new Set<string>(expectedNames)
   const normalized: Record<string, readonly string[]> = {}
   for (const entry of parsed) {
     if (
@@ -101,7 +105,7 @@ function parseSubscriberManifest(raw: string | undefined) {
   }
   if (
     Object.keys(normalized).length !== expected.size ||
-    ALLOCATION_OUTBOX_EVENT_NAMES.some(
+    expectedNames.some(
       (eventName) => normalized[eventName] === undefined
     )
   ) {
@@ -205,7 +209,89 @@ export function parseAllocationOutboxDispatcherConfig(
     mark_timeout_ms: markTimeout,
     safety_margin_ms: safetyMargin,
     subscriber_manifest: parseSubscriberManifest(
-      env.FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON
+      env.FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON,
+      ALLOCATION_OUTBOX_EVENT_NAMES
     ),
+  })
+}
+
+export type FlashSaleOutboxDispatcherConfig = Readonly<{
+  enabled: true
+  concurrency: number
+  allocation: AllocationOutboxDispatcherConfig
+  checkout: AllocationOutboxDispatcherConfig | null
+}>
+
+export function parseFlashSaleOutboxDispatcherConfig(
+  env: NodeJS.ProcessEnv,
+  configModule: ConfigModule
+): FlashSaleOutboxDispatcherConfig | DisabledAllocationOutboxDispatcherConfig {
+  const masterEnabled = env.FLASH_SALE_OUTBOX_DISPATCH_ENABLED
+  if (
+    masterEnabled === undefined ||
+    masterEnabled === "" ||
+    masterEnabled === "false"
+  ) {
+    return Object.freeze({ enabled: false })
+  }
+  if (masterEnabled !== "true") {
+    throw invalid("FLASH_SALE_OUTBOX_DISPATCH_ENABLED")
+  }
+  const checkoutEnabled = env.FLASH_SALE_CHECKOUT_OUTBOX_DISPATCH_ENABLED
+  if (
+    checkoutEnabled !== undefined &&
+    checkoutEnabled !== "" &&
+    checkoutEnabled !== "false" &&
+    checkoutEnabled !== "true"
+  ) {
+    throw invalid("FLASH_SALE_CHECKOUT_OUTBOX_DISPATCH_ENABLED")
+  }
+  if (checkoutEnabled !== "true") {
+    const allocation = parseAllocationOutboxDispatcherConfig(env, configModule)
+    return allocation.enabled
+      ? Object.freeze({
+          enabled: true,
+          concurrency: allocation.concurrency,
+          allocation,
+          checkout: null,
+        })
+      : allocation
+  }
+
+  // Parse and validate common provider/mode/budgets first, then require one
+  // exact union manifest. This happens before either module is allowed to claim.
+  const allocationOnlyManifest = env.FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON
+  const unionManifest = parseSubscriberManifest(allocationOnlyManifest, [
+    ...ALLOCATION_OUTBOX_EVENT_NAMES,
+    ...CHECKOUT_OUTBOX_EVENT_NAMES,
+  ])
+  const allocationEnv = {
+    ...env,
+    FLASH_SALE_OUTBOX_SUBSCRIBER_MANIFEST_JSON: JSON.stringify(
+      ALLOCATION_OUTBOX_EVENT_NAMES.map((event_name) => ({
+        event_name,
+        subscriber_ids: unionManifest[event_name],
+      }))
+    ),
+  }
+  const allocation = parseAllocationOutboxDispatcherConfig(
+    allocationEnv,
+    configModule
+  )
+  if (!allocation.enabled) return allocation
+  const checkoutManifest = Object.freeze(
+    Object.fromEntries(
+      CHECKOUT_OUTBOX_EVENT_NAMES.map((name) => [name, unionManifest[name]])
+    ) as Record<string, readonly string[]>
+  )
+  const checkout = Object.freeze({
+    ...allocation,
+    subscriber_manifest: checkoutManifest,
+  })
+  return Object.freeze({
+    enabled: true,
+    concurrency: allocation.concurrency,
+    allocation,
+    checkout,
   })
 }

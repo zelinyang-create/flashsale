@@ -13,6 +13,14 @@ const queueName =
   process.env.FLASH_SALE_TEST_REDIS_QUEUE ??
   `flash-sale-outbox-${process.pid}`
 
+const databaseHost = process.env.DB_HOST ?? "localhost"
+const databasePort = process.env.DB_PORT ?? "5432"
+const databaseUsername = process.env.DB_USERNAME ?? "postgres"
+const databasePassword = process.env.DB_PASSWORD ?? ""
+const databaseCredentials = `${encodeURIComponent(databaseUsername)}${
+  databasePassword ? `:${encodeURIComponent(databasePassword)}` : ""
+}`
+
 const systemTaxProvider = {
   resolve: { services: [require("@medusajs/tax/dist/providers/system").default] },
   id: "system",
@@ -28,8 +36,7 @@ const systemPaymentProvider = {
 module.exports = defineConfig({
   admin: { disable: true },
   projectConfig: {
-    databaseUrl:
-      "postgres://postgres:postgres@localhost/medusa-flash-sale-outbox-full-app",
+    databaseUrl: `postgres://${databaseCredentials}@${databaseHost}:${databasePort}/medusa-flash-sale-outbox-full-app`,
     workerMode: "shared",
     http: {
       jwtSecret: "test",
