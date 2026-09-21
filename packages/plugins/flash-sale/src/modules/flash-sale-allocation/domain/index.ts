@@ -1,5 +1,7 @@
 export * from "./allocation-fingerprint"
 export * from "./capacity-movement"
+export * from "./capacity-ledger-projector"
+export * from "./ledger-reconciliation-contracts"
 export * from "./allocation-hold-state"
 export * from "./allocation-input"
 export * from "./allocation-outbox"

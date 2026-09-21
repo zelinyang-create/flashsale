@@ -1433,7 +1433,15 @@ Inbox、Campaign Outbox、Worker Fencing、Model-based Test 和 Failpoint Matrix
 
 当前进度：Phase 2A-2a/2b 已完成 Movement Ledger schema、baseline/cutover、事务内在线 writer、
 滚动 Provision Checkpoint Root、单进程故障回滚与多进程真实 kill/crash/race 矩阵；
-Reconcile/Rebuild/Repair 属于 2A-3。
+Phase 2A-3a 已完成独立 Ledger reconciliation issue/contracts 与纯函数 Projector：decimal string 全程以
+`BigInt` 计算，支持 cutover/provision opening、四种 Movement route、按 Capacity 聚合，并明确 safe-repair 与
+manual-required 边界。Capacity materialized counters 仍是在线权威；Checkpoint+Movement 只有在 Control Root、
+全部物理行、Attempt bindings 与 Hold facts 同时验证通过后才是 Capacity counter 重建证据；Subject counter
+不从该 Ledger 派生。详见 ADR-0013。
+
+**Phase 2A-3a 不包含数据库 Reconcile/Rebuild/Repair。** 当前没有数据库 Reader、Repair Writer、自动改数、
+Ledger 行补造/删除/恢复或生产修复门禁；这些仍属于后续 Phase 2A-3b/3c，不得把纯函数通过表述为数据库
+恢复能力已经交付。
 
 退出条件：关键崩溃点恢复后满足声明的 Safety 与有条件 Liveness。
 
